@@ -306,21 +306,24 @@ func ExampleOnError() {
 
 func ExampleWithNamespace() {
 	errBlacklisted := errors.New("supplier is blacklisted")
+	typeOf := func(h *prblm.Handler) string {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/v1/contracts", http.NoBody)
+		h.Write(rec, req, errBlacklisted)
+
+		return rec.Body.String()
+	}
 
 	// Business code names only the sub-type; the namespace makes it a URL.
 	blacklisted := prblm.WithMappers(prblm.Is(errBlacklisted, func(error) *prblm.Problem {
 		return prblm.New(http.StatusConflict, prblm.WithType("contracts/blacklisted-supplier"))
 	}))
 
-	for _, ns := range []string{"/v1/api/probs", "https://kartala.id/probs"} {
-		h := prblm.NewHandler(prblm.WithNamespace(ns), blacklisted)
+	h := prblm.NewHandler(prblm.WithNamespace("/v1/api/probs"), blacklisted)
+	fmt.Println(typeOf(h))
 
-		rec := httptest.NewRecorder()
-		req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/v1/contracts", http.NoBody)
-		h.Write(rec, req, errBlacklisted)
-
-		fmt.Println(rec.Body.String())
-	}
+	h = prblm.NewHandler(prblm.WithNamespace("https://kartala.id/probs"), blacklisted)
+	fmt.Println(typeOf(h))
 	// Output:
 	// {"type":"/v1/api/probs/contracts/blacklisted-supplier","status":409,"instance":"/v1/contracts"}
 	// {"type":"https://kartala.id/probs/contracts/blacklisted-supplier","status":409,"instance":"/v1/contracts"}
@@ -380,4 +383,47 @@ func ExampleHandler_Discovery() {
 	// Output:
 	// 200 application/json public, max-age=3600
 	// {"type":"/v1/api/probs/out-of-credit","subtype":"out-of-credit","status":403,"title":"Out of credit","description":"The account balance is below the price of the request."}
+}
+
+// OutOfCredit is the problem type of the walkthrough, defined once.
+var OutOfCredit = prblm.DefineType("out-of-credit", http.StatusForbidden, "Out of credit",
+	"The account balance is below the price of the request.")
+
+// Example_problemTypes walks through problem types end to end: a
+// namespace, a definition, a mapper that answers with it, and the
+// documentation served at the type URL.
+func Example_problemTypes() {
+	errOutOfCredit := errors.New("out of credit")
+
+	h := prblm.NewHandler(
+		prblm.WithNamespace("/v1/api/probs"),
+		prblm.WithTypes(OutOfCredit),
+		prblm.WithMappers(prblm.Is(errOutOfCredit, func(error) *prblm.Problem {
+			return OutOfCredit.New() // type, status and title come from the definition
+		})),
+	)
+
+	mux := http.NewServeMux()
+	mux.Handle("POST /v1/orders", h.Wrap(func(http.ResponseWriter, *http.Request) error {
+		return errOutOfCredit
+	}))
+
+	if path := h.DiscoveryPath(); path != "" {
+		mux.Handle("GET "+path+"/", h.Discovery())
+	}
+
+	for _, req := range []*http.Request{
+		httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/v1/orders", http.NoBody),
+		httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/v1/api/probs/out-of-credit", http.NoBody),
+	} {
+		req.Header.Set("Accept", "application/json")
+
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, req)
+
+		fmt.Println(rec.Code, rec.Body.String())
+	}
+	// Output:
+	// 403 {"type":"/v1/api/probs/out-of-credit","title":"Out of credit","status":403,"instance":"/v1/orders"}
+	// 200 {"type":"/v1/api/probs/out-of-credit","subtype":"out-of-credit","status":403,"title":"Out of credit","description":"The account balance is below the price of the request."}
 }

@@ -49,10 +49,12 @@ const (
 	caseBlacklisted = "blacklisted"
 )
 
-// The paths the servers answer the cases at.
+// The paths the servers answer the cases at, and the documentation paths.
 const (
-	pathVessel   = "/v1/vessels/7"
-	pathContract = "/v1/contracts/7"
+	pathVessel      = "/v1/vessels/7"
+	pathContract    = "/v1/contracts/7"
+	pathTypeDoc     = "/v1/api/probs/contracts/blacklisted-supplier"
+	pathUnknownType = "/v1/api/probs/contracts/unknown"
 )
 
 // newOptions is the one configuration all three servers are built from.
@@ -88,6 +90,7 @@ func netHTTPServer(t *testing.T, opts []prblm.Option) string {
 	mux := http.NewServeMux()
 	mux.Handle("GET /v1/vessels/{id}", handler)
 	mux.Handle("GET /v1/contracts/{id}", handler)
+	mux.Handle("GET "+h.DiscoveryPath()+"/", h.Discovery())
 
 	return serve(t, mux)
 }
@@ -242,6 +245,29 @@ func TestParity(t *testing.T) {
 			caseName:    caseBlacklisted,
 			contains:    `"type":"/v1/api/probs/contracts/blacklisted-supplier","title":"Supplier is blacklisted"`,
 			status:      http.StatusConflict,
+			contentType: "application/problem+json",
+		},
+		{
+			name:        "documentation as json",
+			path:        pathTypeDoc,
+			accept:      "application/json",
+			contains:    `"description":"The supplier is on the procurement blacklist."`,
+			status:      http.StatusOK,
+			contentType: "application/json",
+		},
+		{
+			name:        "documentation as html",
+			path:        pathTypeDoc,
+			accept:      "text/html",
+			contains:    "<title>Supplier is blacklisted</title>",
+			status:      http.StatusOK,
+			contentType: "text/html; charset=utf-8",
+		},
+		{
+			name:        "unknown type",
+			path:        pathUnknownType,
+			contains:    `"title":"Not Found"`,
+			status:      http.StatusNotFound,
 			contentType: "application/problem+json",
 		},
 	}

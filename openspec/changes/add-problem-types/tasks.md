@@ -152,12 +152,12 @@ Every slice ends with:
 
 ## 7. Slice: parity across net/http, gin and fiber, and documentation
 
-- [ ] 7.1 Extend the parity tables (gin-adapter and fiber-adapter / Scenario: Same output as net/http, all nine rows); verify `go test -race ./internal/paritytest` passes
+- [x] 7.1 Extend the parity tables (gin-adapter and fiber-adapter / Scenario: Same output as net/http, all nine rows); verify `go test -race ./internal/paritytest` passes
   - RED: add the `ErrBlacklisted`, documentation (JSON and HTML) and unknown-type rows, with net/http mounting `Discovery()` at `"GET " + DiscoveryPath() + "/"`
   - GREEN: fix any byte difference in the adapter that diverges. Each difference found is first proven by the failing row (rule 8).
   - REFACTOR: /simplify
-- [ ] 7.2 Add a README "Problem types" walkthrough (namespace, definitions, mapper, discovery for net/http, gin and fiber) and a framework-differences row for discovery serving; verify every code block is mirrored by a compiling Example
-- [ ] 7.3 Run `go_vulncheck` and confirm no new findings; run all four modules' suites with `-race`, and `GOWORK=off` for the three published modules
+- [x] 7.2 Add a README "Problem types" walkthrough (namespace, definitions, mapper, discovery for net/http, gin and fiber) and a framework-differences row for discovery serving; verify every code block is mirrored by a compiling Example
+- [x] 7.3 Run `go_vulncheck` and confirm no new findings; run all four modules' suites with `-race`, and `GOWORK=off` for the three published modules
 
 ## Workflow follow-up
 

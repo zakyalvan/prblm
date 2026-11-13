@@ -168,8 +168,9 @@ h = prblm.NewHandler(prblm.WithNamespace("https://kartala.id/probs"), blackliste
 ## Discovering problem types
 
 RFC 9457 recommends that a problem's type URL lead to documentation people can read. Define each
-type once with `DefineType`, register the definitions with `WithTypes`, and the handler serves their
-documentation. *(Mirrors `ExampleDefineType` and `ExampleHandler_Discovery`.)*
+type once with `DefineType`, usually as a package-level variable, register the definitions with
+`WithTypes`, answer errors with `Type.New`, and mount the documentation. *(The walkthrough is
+`Example_problemTypes`; see also `ExampleDefineType` and `ExampleHandler_Discovery`.)*
 
 ```go
 var OutOfCredit = prblm.DefineType("out-of-credit", http.StatusForbidden, "Out of credit",
@@ -178,16 +179,30 @@ var OutOfCredit = prblm.DefineType("out-of-credit", http.StatusForbidden, "Out o
 h := prblm.NewHandler(
 	prblm.WithNamespace("/v1/api/probs"),
 	prblm.WithTypes(OutOfCredit),
-	prblm.WithMappers(prblm.Is(ErrOutOfCredit, func(error) *prblm.Problem {
+	prblm.WithMappers(prblm.Is(errOutOfCredit, func(error) *prblm.Problem {
 		return OutOfCredit.New() // type, status and title come from the definition
 	})),
 )
 
 mux := http.NewServeMux()
+mux.Handle("POST /v1/orders", h.Wrap(func(http.ResponseWriter, *http.Request) error {
+	return errOutOfCredit
+}))
+
 if path := h.DiscoveryPath(); path != "" {
 	mux.Handle("GET "+path+"/", h.Discovery())
 }
 ```
+
+`POST /v1/orders` now answers with the problem, and its `type` leads to the documentation:
+
+```text
+403 {"type":"/v1/api/probs/out-of-credit","title":"Out of credit","status":403,"instance":"/v1/orders"}
+200 {"type":"/v1/api/probs/out-of-credit","subtype":"out-of-credit","status":403,"title":"Out of credit","description":"The account balance is below the price of the request."}
+```
+
+The same options give the same documentation in gin and fiber: `ginprblm.Middleware` and
+`fiberprblm.ErrorHandler` serve it for paths no route claims (see [gin](#gin) and [fiber](#fiber)).
 
 - **What is served:**
   - each type's documentation at its type URL, such as `/v1/api/probs/out-of-credit`;
@@ -312,10 +327,10 @@ handler from them; with none it gives the safe defaults (mirrored by `ExampleMid
 ```go
 engine := gin.New()
 engine.Use(ginprblm.Middleware(prblm.WithMappers(
-	prblm.Status(ErrVesselNotFound, http.StatusNotFound),
+	prblm.Status(errVesselNotFound, http.StatusNotFound),
 )))
 engine.GET("/v1/vessels/:id", func(c *gin.Context) {
-	_ = c.Error(ErrVesselNotFound) // written as a 404 problem
+	_ = c.Error(errVesselNotFound) // written as a problem response
 })
 ```
 
@@ -329,7 +344,7 @@ engine.GET("/v1/vessels/:id", func(c *gin.Context) {
 	_ = c.AbortWithError(http.StatusForbidden, errors.New("token abc expired"))
 })
 engine.GET("/v1/reports", func(c *gin.Context) {
-	c.AbortWithStatus(http.StatusUnauthorized) // an about:blank 401 problem
+	c.AbortWithStatus(http.StatusUnauthorized)
 })
 ```
 
@@ -356,8 +371,8 @@ opts := []prblm.Option{prblm.OnError(logProblem)}
 
 engine := gin.New()
 engine.Use(ginprblm.Recovery(opts...), ginprblm.Middleware(opts...))
-engine.Group("/v1/contracts", ginprblm.Scope(prblm.Status(ErrLocked, http.StatusLocked))).
-	GET("/:id", func(c *gin.Context) { _ = c.Error(ErrLocked) }) // a 423 problem
+engine.Group("/v1/contracts", ginprblm.Scope(prblm.Status(errLocked, http.StatusLocked))).
+	GET("/:id", func(c *gin.Context) { _ = c.Error(errLocked) })
 ```
 
 **Type documentation:** when the options register problem types (see
@@ -387,10 +402,10 @@ fiber's own 404 and 405, become problems. It takes the same options as `prblm.Ne
 
 ```go
 app := fiber.New(fiber.Config{ErrorHandler: fiberprblm.ErrorHandler(prblm.WithMappers(
-	prblm.Status(ErrVesselNotFound, http.StatusNotFound),
+	prblm.Status(errVesselNotFound, http.StatusNotFound),
 ))})
 app.Get("/v1/vessels/:id", func(fiber.Ctx) error {
-	return ErrVesselNotFound // written as a 404 problem
+	return errVesselNotFound // written as a problem response
 })
 ```
 
@@ -407,8 +422,8 @@ attaches mappers to a route group only (mirrored by `ExampleRecovery` and `Examp
 ```go
 app := fiber.New(fiber.Config{ErrorHandler: fiberprblm.ErrorHandler(prblm.OnError(logProblem))})
 app.Use(fiberprblm.Recovery())
-app.Group("/v1/contracts", fiberprblm.Scope(prblm.Status(ErrLocked, http.StatusLocked))).
-	Get("/:id", func(fiber.Ctx) error { return ErrLocked }) // a 423 problem
+app.Group("/v1/contracts", fiberprblm.Scope(prblm.Status(errLocked, http.StatusLocked))).
+	Get("/:id", func(fiber.Ctx) error { return errLocked })
 ```
 
 **Type documentation:** when the options register problem types (see
@@ -440,6 +455,7 @@ themselves differ:
 | Client went away (`context.Canceled`) | answered; the write is dropped | nothing written; error only to the hook | nothing written; error only to the hook |
 | Panic recovery (opt-in) | `Handler.Recover` | `ginprblm.Recovery(opts...)` | `fiberprblm.Recovery()` with `ErrorHandler` |
 | Ordering rule | — | `Middleware` before aborting middleware | — |
+| Type documentation | mount `Handler.Discovery()` at `Handler.DiscoveryPath()` | `Middleware` via `engine.Use` serves unclaimed paths | `ErrorHandler` serves route-not-found paths |
 
 ## Defaults
 
