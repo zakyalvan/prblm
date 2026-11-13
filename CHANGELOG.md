@@ -60,3 +60,7 @@ The first release, planned as v0.1.0.
   and builds nothing without a hook. This note arrives on a request that succeeded, so the hook is
   no longer called only for answered errors. The gin and fiber adapters report through it; net/http
   has no hook point, so there the conflict is only documented.
+- `mappers/sqlmap`, an opt-in mapper for database/sql errors that uses only the standard library:
+  `sql.ErrNoRows` becomes a 404 problem, and `driver.ErrBadConn` and `sql.ErrConnDone` become a 503
+  problem, each with a fixed, generic detail. `sql.ErrTxDone` and other errors are left to later
+  mappers. `WithNotFound` and `WithUnavailable` replace either problem.

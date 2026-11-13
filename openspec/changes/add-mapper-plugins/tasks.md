@@ -2,28 +2,28 @@
 
 ## 1. Scaffolding for slice 1
 
-- [ ] 1.1 Confirm the core this change builds on works without a tag (`add-problem-details-core` archived; `add-framework-adapters` complete); verify `go build ./...` and `GOWORK=off go test ./...` pass in the root module
-- [ ] 1.2 Create the `mappers/sqlmap` package directory in the root module with a package doc comment; verify `go build ./...` succeeds and `go list -m all` in the root module still shows no third-party module
+- [x] 1.1 Confirm the core this change builds on works without a tag (`add-problem-details-core` archived; `add-framework-adapters` complete); verify `go build ./...` and `GOWORK=off go test ./...` pass in the root module
+- [x] 1.2 Create the `mappers/sqlmap` package directory in the root module with a package doc comment; verify `go build ./...` succeeds and `go list -m all` in the root module still shows no third-party module
 
 ## 2. Slice: sqlmap turns database/sql errors into problems (root module)
 
-- [ ] 2.1 Map no rows to 404 when registered (sql-error-mapping / Scenario: Registered or not, Scenario: Missing row); verify `go test ./mappers/sqlmap -run TestMapper_NoRows` passes
+- [x] 2.1 Map no rows to 404 when registered (sql-error-mapping / Scenario: Registered or not, Scenario: Missing row); verify `go test ./mappers/sqlmap -run TestMapper_NoRows` passes
   - RED: table test over a real `prblm.NewHandler` + `Wrap` via `httptest` with registered/unregistered rows and matched/not-matched rows (plain, wrapped, joined, look-alike text); fails because `sqlmap.Mapper` does not exist
   - GREEN: `Mapper(opts ...Option) prblm.Mapper` returning a `prblm.MapperFunc` with `errors.Is(err, sql.ErrNoRows)` and the generic 404 detail
   - REFACTOR: express cases as data (case list of target + default problem) to avoid repeated branches (Replace Conditional with data/table); /simplify
-- [ ] 2.2 Map connection failures to 503 (sql-error-mapping / Scenario: Connection failure); verify `go test ./mappers/sqlmap -run TestMapper_ConnFailure` passes
+- [x] 2.2 Map connection failures to 503 (sql-error-mapping / Scenario: Connection failure); verify `go test ./mappers/sqlmap -run TestMapper_ConnFailure` passes
   - RED: the three rows
   - GREEN: add `driver.ErrBadConn` and `sql.ErrConnDone` cases
   - REFACTOR: /simplify
-- [ ] 2.3 Leave programming errors and degenerate inputs unmatched (sql-error-mapping / Scenario: Unmapped SQL errors, Scenario: Degenerate inputs); verify `go test ./mappers/sqlmap -run 'TestMapper_(Unmapped|Degenerate)'` passes
+- [x] 2.3 Leave programming errors and degenerate inputs unmatched (sql-error-mapping / Scenario: Unmapped SQL errors, Scenario: Degenerate inputs); verify `go test ./mappers/sqlmap -run 'TestMapper_(Unmapped|Degenerate)'` passes
   - RED: `ErrTxDone` (plain and wrapped), `ErrSkip`, `ErrRemoveArgument`, nil and typed-nil rows; assert no panic and 500 without detail through the handler
   - GREEN: nothing beyond confirming the case list; fix any gap the tests reveal
   - REFACTOR: /simplify
-- [ ] 2.4 Add per-case overrides (sql-error-mapping / Scenario: Override results, Scenario: Nil override option); verify `go test ./mappers/sqlmap -run TestMapper_Override` passes
+- [x] 2.4 Add per-case overrides (sql-error-mapping / Scenario: Override results, Scenario: Nil override option); verify `go test ./mappers/sqlmap -run TestMapper_Override` passes
   - RED: override returning a typed problem, returning nil (falls to a later 410 mapper), panicking (core containment, falls to 410, hook receives the panic); nil override functions keep defaults
   - GREEN: `WithNotFound`, `WithUnavailable` options; nil options and nil functions ignored
   - REFACTOR: share one override mechanism across cases (Parameterize Function); /simplify
-- [ ] 2.5 Write the `sqlmap` godoc (opt-in rationale, the deliberate `ErrTxDone` exclusion, driver-specific not-found errors not covered) with `ExampleMapper`; verify `go test ./mappers/sqlmap -run Example` passes
+- [x] 2.5 Write the `sqlmap` godoc (opt-in rationale, the deliberate `ErrTxDone` exclusion, driver-specific not-found errors not covered) with `ExampleMapper`; verify `go test ./mappers/sqlmap -run Example` passes
 - [ ] 2.6 Verify slice 2 end to end (server with `sqlmap` registered answering 404, 503 and fallback 500) and check `go tool cover -func` covers every `sqlmap` match, no-match and override branch; run `go vet`, `golangci-lint`, `go test -race ./...` and `GOWORK=off go test ./...` for the root module; run gopls `go_diagnostics` on changed files
 
 ## 3. Slice: gormmap module
