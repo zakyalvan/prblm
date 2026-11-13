@@ -19,8 +19,10 @@ import (
 )
 
 const (
-	detailNotFound = "The requested resource was not found."
-	detailConflict = "The resource conflicts with an existing one."
+	detailNotFound   = "The requested resource was not found."
+	detailConflict   = "The resource conflicts with an existing one."
+	detailReference  = "The resource references, or is referenced by, another resource."
+	detailConstraint = "A value does not satisfy a constraint."
 )
 
 // user is a table with a unique constraint named users_email_key.
@@ -209,6 +211,92 @@ func TestMapper_DuplicatedKey(t *testing.T) {
 	}
 }
 
+// vessel is a table whose OwnerID references user, under the foreign key
+// constraint fk_vessels_owner.
+type vessel struct {
+	Owner   user `gorm:"constraint:fk_vessels_owner"`
+	ID      uint
+	OwnerID uint
+}
+
+// insertOrphan inserts a vessel whose owner does not exist, with foreign
+// keys enforced and gorm translating errors, and returns the error.
+func insertOrphan(t *testing.T) error {
+	t.Helper()
+
+	db := openDB(t, true)
+
+	// SQLite enforces foreign keys per connection, and openDB keeps one.
+	if err := db.Exec("PRAGMA foreign_keys = ON").Error; err != nil {
+		t.Fatalf("PRAGMA foreign_keys error = %v", err)
+	}
+
+	if err := db.AutoMigrate(&vessel{}); err != nil {
+		t.Fatalf("AutoMigrate() error = %v", err)
+	}
+
+	err := db.Omit("Owner").Create(&vessel{OwnerID: 9137}).Error
+	if !errors.Is(err, gorm.ErrForeignKeyViolated) {
+		t.Fatalf("Create() error = %v, want gorm.ErrForeignKeyViolated", err)
+	}
+
+	return err
+}
+
+// TestMapper_ConstraintViolated covers the scenario "Translated constraint
+// violations": the two sentinels map like pgxmap maps 23503 and 23514.
+func TestMapper_ConstraintViolated(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		err        func(t *testing.T) error
+		name       string
+		wantDetail string
+		wantStatus int
+	}{
+		{
+			name:       "foreign key from SQLite",
+			err:        insertOrphan,
+			wantStatus: http.StatusConflict,
+			wantDetail: detailReference,
+		},
+		{
+			name:       "wrapped foreign key",
+			err:        func(*testing.T) error { return fmt.Errorf("save: %w", gorm.ErrForeignKeyViolated) },
+			wantStatus: http.StatusConflict,
+			wantDetail: detailReference,
+		},
+		{
+			name:       "wrapped check constraint",
+			err:        func(*testing.T) error { return fmt.Errorf("save: %w", gorm.ErrCheckConstraintViolated) },
+			wantStatus: http.StatusUnprocessableEntity,
+			wantDetail: detailConstraint,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := serve(t, handler(true), tt.err(t))
+
+			if got.status != tt.wantStatus {
+				t.Errorf("status = %d, want %d", got.status, tt.wantStatus)
+			}
+
+			if got.problem.Detail != tt.wantDetail {
+				t.Errorf("detail = %q, want %q", got.problem.Detail, tt.wantDetail)
+			}
+
+			for _, forbidden := range []string{"fk_vessels_owner", "9137", "FOREIGN KEY", "violated"} {
+				if strings.Contains(got.body, forbidden) {
+					t.Errorf("body %q contains %q", got.body, forbidden)
+				}
+			}
+		})
+	}
+}
+
 // myError is a consumer error type, used to store a typed nil in an error.
 type myError struct{}
 
@@ -226,6 +314,7 @@ func TestMapper_Degenerate(t *testing.T) {
 		{name: "nil", err: nil},
 		{name: "invalid transaction", err: gorm.ErrInvalidTransaction},
 		{name: "invalid data", err: gorm.ErrInvalidData},
+		{name: "invalid field", err: gorm.ErrInvalidField},
 		{name: "typed nil", err: typedNil},
 	}
 
@@ -329,6 +418,41 @@ func TestMapper_Override(t *testing.T) {
 			name:      "duplicated key: returns nil",
 			option:    gormmap.WithDuplicatedKey,
 			err:       gorm.ErrDuplicatedKey,
+			override:  func(error) *prblm.Problem { return nil },
+			want:      http.StatusInternalServerError,
+			wantTitle: "Internal Server Error",
+		},
+		{
+			name:   "foreign key: typed problem",
+			option: gormmap.WithForeignKeyViolated,
+			err:    gorm.ErrForeignKeyViolated,
+			override: func(error) *prblm.Problem {
+				return prblm.New(http.StatusUnprocessableEntity, prblm.WithTitle("Unknown owner"))
+			},
+			want:      http.StatusUnprocessableEntity,
+			wantTitle: "Unknown owner",
+		},
+		{
+			name:      "foreign key: nil function",
+			option:    gormmap.WithForeignKeyViolated,
+			err:       gorm.ErrForeignKeyViolated,
+			want:      http.StatusConflict,
+			wantTitle: "Conflict",
+		},
+		{
+			name:   "check constraint: typed problem",
+			option: gormmap.WithCheckConstraintViolated,
+			err:    gorm.ErrCheckConstraintViolated,
+			override: func(error) *prblm.Problem {
+				return prblm.New(http.StatusBadRequest, prblm.WithTitle("Out of range"))
+			},
+			want:      http.StatusBadRequest,
+			wantTitle: "Out of range",
+		},
+		{
+			name:      "check constraint: returns nil",
+			option:    gormmap.WithCheckConstraintViolated,
+			err:       gorm.ErrCheckConstraintViolated,
 			override:  func(error) *prblm.Problem { return nil },
 			want:      http.StatusInternalServerError,
 			wantTitle: "Internal Server Error",
