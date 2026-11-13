@@ -144,7 +144,7 @@ The mapper:
 
 Building the pointer from `fe.Namespace()`:
 - If `fe.Namespace() == fe.StructNamespace()`, no tag name function is registered (or the names coincide), so fall back to `field`. The coincidence case, e.g. tags equal to struct names, is acceptable: the field name is still correct.
-- Strip the first segment (the root struct). An empty remainder gives the pointer `#`.
+- Strip the first segment (the root struct) when there is one; see the anonymous-struct failure mode below. An empty remainder gives the pointer `#`.
 - Tokenize on `.` and `[...]`. Each token is escaped per RFC 6901 (`~` → `~0`, `/` → `~1`), then percent-encoded for the URI fragment form (`url.PathEscape` semantics on non-unreserved characters).
 
 The message:
@@ -159,7 +159,9 @@ On the translator panic: it's recovered locally rather than by the core. A trans
   - **An empty `ValidationErrors`:** no match.
   - **A non-ASCII map key:** percent-encoded.
   - **A namespace with no root segment:** `#`.
-  - **A translator missing the tag:** `fe.Translate` returns the validator's fallback text. Documented as the consumer's responsibility.
+  - **A translator missing the tag:** `fe.Translate` falls back to `fe.Error()`, which names the Go struct (found in implementation, `TestMapper_TranslatorGaps`). The mapper detects that fallback and uses the default message instead.
+  - **A translation that panics:** recovered per entry, like the translator function, and the default message is used.
+  - **An anonymous root struct:** the validator reports no root segment for it (found in implementation, `TestPointer/anonymous_struct`). A root is stripped only when `Namespace()` and `StructNamespace()` start with the same segment; with equal namespaces, a single segment is a field. A nested field of an anonymous struct whose first JSON name equals its Go name stays ambiguous; documented.
   - **A huge number of failed fields:** entries are bounded by what the validator returns. No cap is added; documented.
 
 ### D7. Module and CI wiring

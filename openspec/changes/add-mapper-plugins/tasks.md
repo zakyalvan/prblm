@@ -87,33 +87,33 @@
 ## 5. Slice: validatormap module
 
 - [x] 5.1 Create `mappers/validatormap/go.mod` (requires `github.com/go-playground/validator/v10`, `github.com/go-playground/universal-translator` and the core through `replace github.com/kartaladev/prblm => ../..` until the release; `github.com/go-playground/locales` for tests), add it to `go.work` and CI; verify the job passes on an empty package and the root dependency check still passes
-- [ ] 5.2 Build JSON Pointers and the field fallback (validation-error-mapping / Scenario: Pointer building, Scenario: No tag name function); verify `go test -run 'TestPointer|TestField'` passes and `go test -fuzz FuzzPointer -fuzztime 30s` never panics
+- [x] 5.2 Build JSON Pointers and the field fallback (validation-error-mapping / Scenario: Pointer building, Scenario: No tag name function); verify `go test -run 'TestPointer|TestField'` passes and `go test -fuzz FuzzPointer -fuzztime 30s` never panics
   - RED: every namespace row, using namespaces produced by validating real structs (with and without a tag name function) plus the single-variable row
   - GREEN: unexported tokenizer and RFC 6901 escaping with fragment percent-encoding; `Namespace() == StructNamespace()` fallback
   - REFACTOR: separate tokenizing from escaping (Split Phase); /simplify
-- [ ] 5.3 Turn validation errors into a 422 problem with `errors` entries when registered (validation-error-mapping / Scenario: Registered or not, Scenario: Invalid fields, Scenario: Wrapped and empty validation errors); verify `go test -run TestMapper_Validation` passes
+- [x] 5.3 Turn validation errors into a 422 problem with `errors` entries when registered (validation-error-mapping / Scenario: Registered or not, Scenario: Invalid fields, Scenario: Wrapped and empty validation errors); verify `go test -run TestMapper_Validation` passes
   - RED: rows through a real handler with a real validator and struct; exact `errors` JSON; wrapped, joined and empty rows
   - GREEN: `Mapper` with `errors.AsType[validator.ValidationErrors]`, empty guard, entries with `json` tags, default message `failed validation: <tag>`
   - REFACTOR: /simplify
-- [ ] 5.4 Never expose rejected values or type names (validation-error-mapping / Scenario: Sensitive input); verify `go test -run TestMapper_NoLeak` passes
+- [x] 5.4 Never expose rejected values or type names (validation-error-mapping / Scenario: Sensitive input); verify `go test -run TestMapper_NoLeak` passes
   - RED: the forbidden-strings row in JSON and XML
   - GREEN: confirm `fe.Value()`, `fe.Param()` and `fe.Error()` are never used
   - REFACTOR: /simplify
-- [ ] 5.5 Make status, type and title configurable (validation-error-mapping / Scenario: Configured problem, Scenario: Invalid status); verify `go test -run TestMapper_Options` passes
+- [x] 5.5 Make status, type and title configurable (validation-error-mapping / Scenario: Configured problem, Scenario: Invalid status); verify `go test -run TestMapper_Options` passes
   - RED: the three configuration rows; 200, 500 and 0 construction panics
   - GREEN: `WithStatus`, `WithType`, `WithTitle`
   - REFACTOR: /simplify
-- [ ] 5.6 Translate messages per request (validation-error-mapping / Scenario: Translator choices); verify `go test -run TestMapper_Translator` passes
+- [x] 5.6 Translate messages per request (validation-error-mapping / Scenario: Translator choices); verify `go test -run TestMapper_Translator` passes
   - RED: Indonesian and English translators with `min` registered (via `locales` + `universal-translator`), nil result, panicking function, no function
   - GREEN: `WithTranslator`, local `recover` around the function, `fe.Translate`
   - REFACTOR: /simplify
-- [ ] 5.7 Leave invalid usage and degenerate inputs unmatched (validation-error-mapping / Scenario: Degenerate inputs); verify `go test -run TestMapper_Degenerate` passes
+- [x] 5.7 Leave invalid usage and degenerate inputs unmatched (validation-error-mapping / Scenario: Degenerate inputs); verify `go test -run TestMapper_Degenerate` passes
   - RED: nil, `InvalidValidationError` from validating nil, typed-nil rows
   - GREEN: confirm guards
   - REFACTOR: /simplify
-- [ ] 5.8 Render validation problems as XML (validation-error-mapping / Scenario: XML client); verify `go test -run TestMapper_XML` passes with exact `<errors><i>...</i></errors>` content
-- [ ] 5.9 Write the `validatormap` godoc (registering a tag name function, translator setup, `pointer` vs `field`, 422 rationale) with `ExampleMapper` and `ExampleWithTranslator`; verify `go test -run Example` passes
-- [ ] 5.10 Verify slice 5 end to end (JSON and XML clients, translated and untranslated) and check `go tool cover -func` covers entry building, the tokenizer and escaping, the field fallback and translator selection including the recover branch; run vet, lint, `go test -race` and `GOWORK=off go test` for `mappers/validatormap`; run gopls `go_diagnostics` on changed files
+- [x] 5.8 Render validation problems as XML (validation-error-mapping / Scenario: XML client); verify `go test -run TestMapper_XML` passes with exact `<errors><i>...</i></errors>` content
+- [x] 5.9 Write the `validatormap` godoc (registering a tag name function, translator setup, `pointer` vs `field`, 422 rationale) with `ExampleMapper` and `ExampleWithTranslator`; verify `go test -run Example` passes
+- [x] 5.10 Verify slice 5 end to end (JSON and XML clients, translated and untranslated) and check `go tool cover -func` covers entry building, the tokenizer and escaping, the field fallback and translator selection including the recover branch; run vet, lint, `go test -race` and `GOWORK=off go test` for `mappers/validatormap`; run gopls `go_diagnostics` on changed files
 
 ## 6. Release readiness
 
