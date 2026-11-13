@@ -217,9 +217,18 @@ and a `Cache-Control` the handler set is kept.
 
 ### gin
 
-`github.com/kartaladev/prblm/ginprblm` turns errors recorded with `c.Error` into problems:
+```sh
+go get github.com/kartaladev/prblm/ginprblm
+```
+
+`ginprblm.Middleware` turns the last error recorded with `c.Error` into a problem, once the
+handlers after it return (mirrored by `ExampleMiddleware`):
 
 ```go
+h := prblm.NewHandler(prblm.WithMappers(
+	prblm.Status(ErrVesselNotFound, http.StatusNotFound),
+))
+
 engine := gin.New()
 engine.Use(ginprblm.Middleware(h))
 engine.GET("/v1/vessels/:id", func(c *gin.Context) {
@@ -227,29 +236,96 @@ engine.GET("/v1/vessels/:id", func(c *gin.Context) {
 })
 ```
 
-Aborts keep working, and the problem still sets the status and `Content-Type`:
+Aborts keep working, and the problem still sets the status and `Content-Type`, because the
+middleware holds back the header gin's aborts would send at once (mirrored by
+`ExampleMiddleware_abort`):
+
+```go
+engine.GET("/v1/vessels/:id", func(c *gin.Context) {
+	// The error's text is never sent; 403 is used as the status.
+	_ = c.AbortWithError(http.StatusForbidden, errors.New("token abc expired"))
+})
+engine.GET("/v1/reports", func(c *gin.Context) {
+	c.AbortWithStatus(http.StatusUnauthorized) // an about:blank 401 problem
+})
+```
 
 - `c.AbortWithError(403, err)`: the abort status is a hint, used only when no mapper or
-  self-describing error recognizes `err`. The error's text is never sent.
+  self-describing error recognizes `err`. A status below 400 is no hint.
 - `c.AbortWithStatus(401)`, or a status of 400 or above with no body: an `about:blank` problem
   for that status.
-- Statuses below 400, and responses with a body (`c.JSON`, `c.AbortWithStatusJSON`), are sent
+- Statuses below 400, responses with a body (`c.JSON`, `c.AbortWithStatusJSON`), streams
+  (flushed responses, server-sent events) and hijacked connections (websockets) are sent
   unchanged; a recorded error then only reaches the `OnError` hook.
 
-Register `Middleware` before any middleware that aborts or writes. Middleware that runs earlier
-and sends the header first leaves nothing to replace: the error then only reaches the hook.
+**Registration order:** register `Middleware` before any middleware that aborts or writes.
+Middleware that runs earlier and sends the header first leaves nothing to replace: the error then
+only reaches the hook.
 
-`ginprblm.Scope(mappers...)` attaches mappers to a route group only. `ginprblm.Recovery(h)` turns
-panics into the safe 500 problem and gives the panic value and stack to the `OnError` hook; use it
-instead of `gin.Recovery()`, before or after `Middleware`:
+**Recovery and route groups:** `ginprblm.Recovery(h)` turns panics into the safe 500 problem and
+gives the panic value and stack to the `OnError` hook. Use it instead of `gin.Recovery()`, before
+or after `Middleware`. `ginprblm.Scope(mappers...)` attaches mappers to a route group only
+(mirrored by `ExampleRecovery` and `ExampleScope`):
 
 ```go
 engine := gin.New()
 engine.Use(ginprblm.Recovery(h), ginprblm.Middleware(h))
-contracts := engine.Group("/v1/contracts", ginprblm.Scope(prblm.Status(ErrLocked, http.StatusLocked)))
+engine.Group("/v1/contracts", ginprblm.Scope(prblm.Status(ErrLocked, http.StatusLocked))).
+	GET("/:id", func(c *gin.Context) { _ = c.Error(ErrLocked) }) // a 423 problem
 ```
 
-An adapter for fiber is planned as a separate module.
+### fiber
+
+```sh
+go get github.com/kartaladev/prblm/fiberprblm
+```
+
+`fiberprblm.ErrorHandler` is the application's error handler: every error a handler returns, and
+fiber's own 404 and 405, become problems (mirrored by `ExampleErrorHandler`):
+
+```go
+h := prblm.NewHandler(prblm.WithMappers(
+	prblm.Status(ErrVesselNotFound, http.StatusNotFound),
+))
+
+app := fiber.New(fiber.Config{ErrorHandler: fiberprblm.ErrorHandler(h)})
+app.Get("/v1/vessels/:id", func(fiber.Ctx) error {
+	return ErrVesselNotFound // written as a 404 problem
+})
+```
+
+The code of a `*fiber.Error` is a status hint, used only when no mapper or self-describing error
+recognizes the error; its message (`Cannot GET /x`, or `fiber.NewError(403, "token abc
+expired")`) is never sent.
+
+**Recovery and route groups:** `fiberprblm.Recovery()` turns a panic into an error returned to the
+error handler; pair it with `ErrorHandler` to get the safe 500 problem and the panic value and
+stack in the `OnError` hook. With fiber's default error handler, the client gets a plain-text 500
+`Internal Server Error`, and the panic value never leaks either. `fiberprblm.Scope(mappers...)`
+attaches mappers to a route group only (mirrored by `ExampleRecovery` and `ExampleScope`):
+
+```go
+app := fiber.New(fiber.Config{ErrorHandler: fiberprblm.ErrorHandler(h)})
+app.Use(fiberprblm.Recovery())
+app.Group("/v1/contracts", fiberprblm.Scope(prblm.Status(ErrLocked, http.StatusLocked))).
+	Get("/:id", func(fiber.Ctx) error { return ErrLocked }) // a 423 problem
+```
+
+### Framework differences
+
+For the same handler and request, net/http, gin and fiber send the same status, `Content-Type`,
+`Vary` and body bytes; a parity test in `internal/paritytest` checks it. Where the frameworks
+themselves differ:
+
+| Situation | net/http | gin | fiber |
+|---|---|---|---|
+| How an error reaches the library | returned from `Wrap`, or `Write` | `c.Error`, `c.AbortWithError` | returned from a handler |
+| Framework status codes | — | abort status is a hint | `*fiber.Error` code is a hint |
+| Body written before the error | kept; error only to the hook | kept; error only to the hook | buffered body **replaced** by the problem (nothing was sent yet); a stream is kept |
+| Streams and hijacked connections | kept; error only to the hook | kept; error only to the hook | a stream is kept; error only to the hook |
+| Client went away (`context.Canceled`) | answered; the write is dropped | nothing written; error only to the hook | nothing written; error only to the hook |
+| Panic recovery (opt-in) | `Handler.Recover` | `ginprblm.Recovery(h)` | `fiberprblm.Recovery()` with `ErrorHandler` |
+| Ordering rule | — | `Middleware` before aborting middleware | — |
 
 ## Defaults
 

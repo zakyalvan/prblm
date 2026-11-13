@@ -133,13 +133,13 @@
 
 ## 8. Slice: cross-adapter parity and documentation
 
-- [ ] 8.1 Create the unpublished test module `internal/paritytest` (requires core, `ginprblm`, `fiberprblm`, replaced with `../..`, `../../ginprblm` and `../../fiberprblm`; it keeps these replaces after the release) and add it to `go.work`; verify `go build ./...` succeeds in the workspace
-- [ ] 8.2 Compare outputs across net/http, gin and fiber (gin-adapter / Scenario: Same output as net/http; fiber-adapter / Scenario: Same output as net/http); verify `go test -race ./internal/paritytest` passes
+- [x] 8.1 Create the unpublished test module `internal/paritytest` (requires core, `ginprblm`, `fiberprblm`, replaced with `../..`, `../../ginprblm` and `../../fiberprblm`; it keeps these replaces after the release) and add it to `go.work`; verify `go build ./...` succeeds in the workspace
+- [x] 8.2 Compare outputs across net/http, gin and fiber (gin-adapter / Scenario: Same output as net/http; fiber-adapter / Scenario: Same output as net/http); verify `go test -race ./internal/paritytest` passes
   - RED: one table test, one row per parity Examples row, three servers sharing one `prblm.Handler`, comparing status, `Content-Type`, `Vary` and body bytes
   - GREEN: fix adapter header or body differences until identical (never special-case the test)
   - REFACTOR: /simplify
-- [ ] 8.3 Add README sections for gin and fiber (install, quick start, abort semantics, registration order, recovery, framework differences table); verify each code block is mirrored by a compiling `Example`
-- [ ] 8.4 Update `RELEASING.md` with the `ginprblm/vX.Y.Z` and `fiberprblm/vX.Y.Z` tags; verify `GOWORK=off go list -m` resolves each module against a local tag
+- [x] 8.3 Add README sections for gin and fiber (install, quick start, abort semantics, registration order, recovery, framework differences table); verify each code block is mirrored by a compiling `Example`
+- [x] 8.4 Update `RELEASING.md` with the `ginprblm/vX.Y.Z` and `fiberprblm/vX.Y.Z` tags; verify `GOWORK=off go list -m` resolves each module against a local tag
 
 ## Workflow follow-up
 
