@@ -156,6 +156,7 @@ Done before group 7 continues; 7.1 is re-run in 8.10.
   - GREEN: collect recovered panics as `*prblm.PanicError` and attach them with `prblm.WithCause`
   - REFACTOR: /simplify
 - [x] 8.10 Re-run 7.1's full verification in every module, including `internal/plugintest`, and check `go tool cover -func` covers the new branches (gormmap's new cases, `WithCode` validation, the per-problem location choice, `JSONName`, the panic cause)
+- [x] 8.11 Security review follow-up: pin the misplaced pointer for a map key containing `]` followed by `.` or `[` with `TestPointer/map_key_with_delimiters`, and document the limit in the godoc, the spec and D6 (it can't be fixed in the mapper: the validator writes keys unescaped)
 
 ## Workflow follow-up
 

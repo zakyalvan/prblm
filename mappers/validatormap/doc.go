@@ -57,6 +57,10 @@
 // A pointer is an RFC 6901 JSON Pointer in URI fragment form: slice indexes
 // and map keys are tokens, "~" and "/" in a key are escaped as "~0" and
 // "~1", and other characters are percent-encoded ("#/meta/caf%C3%A9").
+// The validator writes map keys into the namespace unescaped, so a key that
+// contains "]" followed by "." or "[" reads as a deeper path: the key
+// "x].admin[0" of meta gives "#/meta/x/admin/0/name". Only the client that
+// sent such a key gets the misplaced pointer.
 // Without JSON names, a pointer would be wrong, so each entry instead has a
 // field member: the Go namespace without the root struct
 // ("Items[0].Name"). The validator has no getter for its tag name function,

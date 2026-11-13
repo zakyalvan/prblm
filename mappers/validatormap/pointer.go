@@ -111,6 +111,12 @@ func pointerOf(ns string) string {
 // JSON Pointer: names separated by "." and indexes or map keys in "[...]".
 // A key may itself contain "]", ".", or "[", so it ends at the first "]"
 // followed by the end, "." or "[".
+//
+// The validator writes map keys unescaped, so a key that contains "]"
+// followed by "." or "[" (such as "x].admin[0") gives the same namespace as
+// a deeper path, and no parser can tell the two apart. The pointer then
+// follows the deeper path. Only the client that sent such a key gets the
+// misplaced pointer, and it still points into that client's own input.
 func tokens(ns string) []string {
 	var out []string
 

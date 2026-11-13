@@ -81,6 +81,16 @@ Each `pointer` SHALL be an RFC 6901 JSON Pointer in URI fragment form, built fro
 | `Config.meta[café]` | `#/meta/caf%C3%A9` |
 | (empty, from validating a single variable) | `#` |
 
+#### Scenario: Map key that looks like a path
+- **Given** a validator that reports JSON tag names
+- **When** field `name` of the value under the map key `<key>` of `meta` fails validation
+- **Then** the entry's pointer is `<pointer>`, because the validator writes the key unescaped and the namespace can't be told apart from the deeper path
+
+##### Examples:
+| key | pointer |
+|-----|---------|
+| `x].admin[0` | `#/meta/x/admin/0/name` |
+
 #### Scenario: Embedded structs
 - **Given** a validator created with `validator.WithTagNameFuncBlankOmit()` and the tag name function `validatormap.JSONName`
 - **When** field `name` of the embedded struct `<embedding>` in `Order` fails validation

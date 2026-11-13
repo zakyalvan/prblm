@@ -172,6 +172,7 @@ Embedded structs: the validator puts an embedded struct's name in the namespace 
 - **Failure modes:**
   - **An empty `ValidationErrors`:** no match.
   - **A non-ASCII map key:** percent-encoded.
+  - **A map key containing `]` followed by `.` or `[`:** the validator writes keys unescaped, and `FieldError` exposes only the namespace strings (checked against v10.30.6, the latest), so the key `x].admin[0` gives the same namespace as the path `meta`, `x`, `admin`, `0`, `name`. It can't be fixed in the mapper: no parse can tell the two apart, and a digit key like `0].x[1` even looks like a slice index. The pointer follows the deeper path. Only the client that sent the key gets the misplaced pointer, inside its own input, so nothing leaks. Pinned by `TestPointer/map_key_with_delimiters` and documented.
   - **A namespace with no root segment:** `#`.
   - **A translator missing the tag:** `fe.Translate` falls back to `fe.Error()`, which names the Go struct (found in implementation, `TestMapper_TranslatorGaps`). The mapper detects that fallback and uses the default message instead.
   - **A translation that panics:** recovered per entry, like the translator function, and the default message is used.

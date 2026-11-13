@@ -126,6 +126,30 @@ func TestPointer(t *testing.T) {
 		}
 	})
 
+	t.Run("map key with delimiters", func(t *testing.T) {
+		t.Parallel()
+
+		// The validator writes a map key into the namespace unescaped, so the
+		// key "x].admin[0" gives the namespace of the path meta, x, admin, 0,
+		// name. The two can't be told apart, and the pointer follows the
+		// path: a known limit, documented in the package documentation.
+		type member struct {
+			Name string `json:"name" validate:"required"`
+		}
+
+		var cfg struct {
+			Meta map[string]member `json:"meta" validate:"dive"`
+		}
+
+		cfg.Meta = map[string]member{"x].admin[0": {}}
+
+		ves := fieldErrors(t, jsonValidator(), cfg)
+
+		if p, _ := location(ves[0], usesJSONNames(ves)); p != "#/meta/x/admin/0/name" {
+			t.Errorf("location(%q) = %q, want %q", ves[0].Namespace(), p, "#/meta/x/admin/0/name")
+		}
+	})
+
 	t.Run("single variable", func(t *testing.T) {
 		t.Parallel()
 
