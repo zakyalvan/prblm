@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -448,4 +449,55 @@ func TestMiddleware_Concurrent(t *testing.T) {
 	}
 
 	wg.Wait()
+}
+
+// problem-types / Scenario: Hostile host headers, through gin: the type
+// comes from the namespace only, never from the request's host.
+func TestMiddleware_HostHeaders(t *testing.T) {
+	t.Parallel()
+
+	errBlacklisted := errors.New("blacklisted")
+	blacklisted := prblm.WithMappers(prblm.Is(errBlacklisted, func(error) *prblm.Problem {
+		return prblm.New(http.StatusConflict, prblm.WithType("contracts/blacklisted-supplier"))
+	}))
+
+	tests := []struct {
+		name      string
+		namespace string
+		header    http.Header
+		rendered  string
+	}{
+		{
+			name: "host on a path namespace", namespace: "/v1/api/probs",
+			header: http.Header{"Host": {"evil.example"}}, rendered: "/v1/api/probs/contracts/blacklisted-supplier",
+		},
+		{
+			name: "forwarded headers on a path namespace", namespace: "/v1/api/probs",
+			header:   http.Header{"X-Forwarded-Host": {"evil.example"}, "X-Forwarded-Proto": {"http"}},
+			rendered: "/v1/api/probs/contracts/blacklisted-supplier",
+		},
+		{
+			name: "host on a uri namespace", namespace: "https://kartala.id/probs",
+			header: http.Header{"Host": {"evil.example"}}, rendered: "https://kartala.id/probs/contracts/blacklisted-supplier",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			engine := newEngine(func(c *gin.Context) { _ = c.Error(errBlacklisted) }, prblm.WithNamespace(tt.namespace), blacklisted)
+
+			req := get(t, "/x")
+			maps.Copy(req.Header, tt.header)
+
+			if host := tt.header.Get("Host"); host != "" {
+				req.Host = host
+			}
+
+			if got := parseRecorded(t, serve(t, engine, req)).Type; got != tt.rendered {
+				t.Errorf("type = %q, want %q", got, tt.rendered)
+			}
+		})
+	}
 }

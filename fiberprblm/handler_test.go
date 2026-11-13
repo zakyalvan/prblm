@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
 	"strings"
 	"sync"
@@ -549,5 +550,57 @@ func TestErrorHandler_NilError(t *testing.T) {
 
 	if res.status != http.StatusAccepted || res.body != "" || strings.HasPrefix(res.header.Get("Content-Type"), "application/problem") {
 		t.Errorf("response %d %q %q, want the handler's 202 untouched", res.status, res.header.Get("Content-Type"), res.body)
+	}
+}
+
+// problem-types / Scenario: Hostile host headers, through fiber: the type
+// comes from the namespace only, never from the request's host.
+func TestErrorHandler_HostHeaders(t *testing.T) {
+	t.Parallel()
+
+	errBlacklisted := errors.New("blacklisted")
+	blacklisted := prblm.WithMappers(prblm.Is(errBlacklisted, func(error) *prblm.Problem {
+		return prblm.New(http.StatusConflict, prblm.WithType("contracts/blacklisted-supplier"))
+	}))
+
+	tests := []struct {
+		name      string
+		namespace string
+		header    http.Header
+		rendered  string
+	}{
+		{
+			name: "host on a path namespace", namespace: "/v1/api/probs",
+			header: http.Header{"Host": {"evil.example"}}, rendered: "/v1/api/probs/contracts/blacklisted-supplier",
+		},
+		{
+			name: "forwarded headers on a path namespace", namespace: "/v1/api/probs",
+			header:   http.Header{"X-Forwarded-Host": {"evil.example"}, "X-Forwarded-Proto": {"http"}},
+			rendered: "/v1/api/probs/contracts/blacklisted-supplier",
+		},
+		{
+			name: "host on a uri namespace", namespace: "https://kartala.id/probs",
+			header: http.Header{"Host": {"evil.example"}}, rendered: "https://kartala.id/probs/contracts/blacklisted-supplier",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			app := newApp(prblm.WithNamespace(tt.namespace), blacklisted)
+			app.Get("/x", func(fiber.Ctx) error { return errBlacklisted })
+
+			req := get(t, http.MethodGet, "/x")
+			maps.Copy(req.Header, tt.header)
+
+			if host := tt.header.Get("Host"); host != "" {
+				req.Host = host
+			}
+
+			if got := problemOf(t, test(t, app, req)).Type; got != tt.rendered {
+				t.Errorf("type = %q, want %q", got, tt.rendered)
+			}
+		})
 	}
 }

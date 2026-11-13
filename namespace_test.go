@@ -246,8 +246,9 @@ func TestType_New_NoNamespace(t *testing.T) {
 
 	var r recorder
 
+	credit := prblm.DefineType("out-of-credit", http.StatusForbidden, "Out of credit", "")
 	h := prblm.NewHandler(prblm.OnError(r.hook), prblm.WithMappers(
-		prblm.Is(errContract, func(error) *prblm.Problem { return outOfCredit.New() }),
+		prblm.Is(errContract, func(error) *prblm.Problem { return credit.New() }),
 	))
 
 	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/v1/orders/42", http.NoBody)

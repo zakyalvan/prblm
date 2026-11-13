@@ -552,7 +552,8 @@ func TestDiscovery_Conditional(t *testing.T) {
 
 	full := discover(t, h, http.MethodGet, path, accept("text/html"))
 	e := full.Header().Get("ETag")
-	jsonTag := discover(t, h, http.MethodGet, path, accept(jsonType)).Header().Get("ETag")
+	fullJSON := discover(t, h, http.MethodGet, path, accept(jsonType))
+	jsonTag := fullJSON.Header().Get("ETag")
 
 	tests := []struct {
 		name        string
@@ -569,7 +570,7 @@ func TestDiscovery_Conditional(t *testing.T) {
 		{name: "weak", method: http.MethodGet, accept: "text/html", ifNoneMatch: "W/" + e, status: http.StatusNotModified, etag: e},
 		{name: "any", method: http.MethodGet, accept: "text/html", ifNoneMatch: "*", status: http.StatusNotModified, etag: e},
 		{name: "other", method: http.MethodGet, accept: "text/html", ifNoneMatch: `"other"`, status: http.StatusOK, etag: e, body: full.Body.String()},
-		{name: "json with the html tag", method: http.MethodGet, accept: jsonType, ifNoneMatch: e, status: http.StatusOK, etag: jsonTag},
+		{name: "json with the html tag", method: http.MethodGet, accept: jsonType, ifNoneMatch: e, status: http.StatusOK, etag: jsonTag, body: fullJSON.Body.String()},
 		{name: "malformed", method: http.MethodGet, accept: "text/html", ifNoneMatch: ";;;garbage", status: http.StatusOK, etag: e, body: full.Body.String()},
 		{name: "empty", method: http.MethodGet, accept: "text/html", status: http.StatusOK, etag: e, body: full.Body.String()},
 	}
@@ -901,8 +902,8 @@ func noteShadowed(t *testing.T, h *prblm.Handler, reqs ...shadowRequest) {
 }
 
 // assertShadowNotes checks that the hook received notes notes, each
-// wrapping ErrShadowedDocumentation, with no problem, and naming one of the
-// routes of reqs, each route at most once.
+// wrapping ErrShadowedDocumentation, with no problem, and naming the route
+// and the path of one of reqs, each route at most once.
 func assertShadowNotes(t *testing.T, calls []hookCall, notes int, reqs ...shadowRequest) {
 	t.Helper()
 
@@ -920,13 +921,13 @@ func assertShadowNotes(t *testing.T, calls []hookCall, notes int, reqs ...shadow
 		route := ""
 
 		for _, req := range reqs {
-			if strings.Contains(call.err.Error(), "route "+strconv.Quote(req.route)) {
+			if strings.Contains(call.err.Error(), "route "+strconv.Quote(req.route)+" hides "+strconv.Quote(req.path)) {
 				route = req.route
 			}
 		}
 
 		if route == "" || named[route] {
-			t.Errorf("note %q names no route of %+v, or one already named", call.err, reqs)
+			t.Errorf("note %q names no route and path of %+v, or a route already named", call.err, reqs)
 		}
 
 		named[route] = true

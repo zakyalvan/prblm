@@ -233,13 +233,18 @@ func TestWithTypes_Validation(t *testing.T) {
 	ns := prblm.WithNamespace("/v1/api/probs")
 
 	accepted := []struct {
-		name string
-		opts []prblm.Option
+		name       string
+		opts       []prblm.Option
+		documented []string
 	}{
-		{name: "namespace then types", opts: []prblm.Option{ns, prblm.WithTypes(a, b)}},
-		{name: "types then namespace", opts: []prblm.Option{prblm.WithTypes(a), ns}},
-		{name: "types in two options", opts: []prblm.Option{ns, prblm.WithTypes(a), prblm.WithTypes(b)}},
-		{name: "a nil type", opts: []prblm.Option{ns, prblm.WithTypes(a, nil)}},
+		{name: "namespace then types", opts: []prblm.Option{ns, prblm.WithTypes(a, b)}, documented: []string{a.Subtype(), b.Subtype()}},
+		{name: "types then namespace", opts: []prblm.Option{prblm.WithTypes(a), ns}, documented: []string{a.Subtype()}},
+		{
+			name:       "types in two options",
+			opts:       []prblm.Option{ns, prblm.WithTypes(a), prblm.WithTypes(b)},
+			documented: []string{a.Subtype(), b.Subtype()},
+		},
+		{name: "a nil type", opts: []prblm.Option{ns, prblm.WithTypes(a, nil)}, documented: []string{a.Subtype()}},
 		{name: "no types", opts: []prblm.Option{ns, prblm.WithTypes()}},
 		{name: "no types and no namespace", opts: []prblm.Option{prblm.WithTypes()}},
 	}
@@ -248,7 +253,18 @@ func TestWithTypes_Validation(t *testing.T) {
 		t.Run("accepted "+tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			prblm.NewHandler(tt.opts...)
+			h := prblm.NewHandler(tt.opts...)
+
+			if len(tt.documented) == 0 && h.DiscoveryPath() != "" {
+				t.Errorf("DiscoveryPath() = %q, want discovery off without types", h.DiscoveryPath())
+			}
+
+			for _, subtype := range tt.documented {
+				res, ok := h.RespondDiscovery(t.Context(), prblm.DiscoveryRequest{Method: http.MethodGet, Path: "/v1/api/probs/" + subtype})
+				if !ok || res.Status != http.StatusOK {
+					t.Errorf("documentation of %q: served %v with %d, want 200, registered", subtype, ok, res.Status)
+				}
+			}
 		})
 	}
 
