@@ -12,21 +12,21 @@
 
 ## 2. Slice: gin turns a recorded sentinel error into a JSON problem
 
-- [ ] 2.1 Resolve the last recorded error after `c.Next()` (gin-adapter / Scenario: Recorded errors); verify `go test -race -run TestMiddleware_RecordedErrors` passes with `httptest`
+- [x] 2.1 Resolve the last recorded error after `c.Next()` (gin-adapter / Scenario: Recorded errors); verify `go test -race -run TestMiddleware_RecordedErrors` passes with `httptest`
   - RED: table test with all four rows (status, `Content-Type`, instance, hook error); fails because `Middleware` does not exist
   - GREEN: `Middleware(h)` building `prblm.Request` from `c.Request`, calling `Respond` with `c.Errors.Last().Err`, copying `Response` into `c.Writer`
   - REFACTOR: extract "copy Response to writer" (Extract Function) for reuse by Recovery; /simplify
-- [ ] 2.2 Never leak unmapped text (gin-adapter / Scenario: Unmapped error text never leaks); verify `go test -run TestMiddleware_NoLeak` passes
+- [x] 2.2 Never leak unmapped text (gin-adapter / Scenario: Unmapped error text never leaks); verify `go test -run TestMiddleware_NoLeak` passes
   - RED: both text rows
   - GREEN: none expected beyond 2.1 (core fallback); if red, fix the adapter, not the test
   - REFACTOR: /simplify
-- [ ] 2.3 Contain faulty consumer code (gin-adapter / Scenario: Faulty consumer code under gin); verify `go test -race -run TestMiddleware_FaultyConsumer` passes and a follow-up request on the same engine succeeds
+- [x] 2.3 Contain faulty consumer code (gin-adapter / Scenario: Faulty consumer code under gin); verify `go test -race -run TestMiddleware_FaultyConsumer` passes and a follow-up request on the same engine succeeds
   - RED: four faulty rows
   - GREEN: the D2 guard around `Respond`
   - REFACTOR: /simplify
-- [ ] 2.4 Reject a nil handler at construction (gin-adapter / Scenario: Nil handler, error-middleware row); verify `go test -run TestMiddleware_NilHandler` passes
-- [ ] 2.5 Write the `ginprblm` package godoc with `ExampleMiddleware`; verify `go test -run Example` passes
-- [ ] 2.6 Verify slice 2 end to end with an `httptest.Server` and check `go tool cover -func` covers every branch of `Middleware` introduced so far; run gopls `go_diagnostics` on changed files, `-race`, vet, lint and `GOWORK=off go test ./...`
+- [x] 2.4 Reject a nil handler at construction (gin-adapter / Scenario: Nil handler, error-middleware row); verify `go test -run TestMiddleware_NilHandler` passes
+- [x] 2.5 Write the `ginprblm` package godoc with `ExampleMiddleware`; verify `go test -run Example` passes
+- [x] 2.6 Verify slice 2 end to end with an `httptest.Server` and check `go tool cover -func` covers every branch of `Middleware` introduced so far; run gopls `go_diagnostics` on changed files, `-race`, vet, lint and `GOWORK=off go test ./...`
 
 ## 3. Slice: gin abort semantics (deferred-header writer, once the early commit is proven)
 
