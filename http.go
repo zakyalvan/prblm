@@ -167,25 +167,6 @@ func (h *Handler) mustExist(method string) {
 	}
 }
 
-// mergeHeader merges the headers of a problem response into dst, the headers
-// the handler already set. Response headers replace the handler's, except
-// that Vary keeps the handler's field names and a Cache-Control the handler
-// set is kept: it already chose how its response may be cached.
-func mergeHeader(dst, src http.Header) {
-	for name, values := range src {
-		switch name {
-		case "Vary":
-			addVary(dst, values...)
-		case "Cache-Control":
-			if len(dst.Values(name)) == 0 {
-				dst[name] = values
-			}
-		default:
-			dst[name] = values
-		}
-	}
-}
-
 // requestOf describes r for [Handler.Respond]. It uses the URL path rather
 // than the request URI, so the query string never reaches the problem.
 func requestOf(r *http.Request) Request {
@@ -284,7 +265,7 @@ func (tw *trackingWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
 // send writes res: its headers merged into those already set, its status
 // and its body.
 func (tw *trackingWriter) send(res Response) {
-	mergeHeader(tw.Header(), res.Header)
+	res.MergeInto(tw.Header())
 	tw.WriteHeader(res.Status)
 	// A failed write means the client is gone; there is nobody left to
 	// tell.

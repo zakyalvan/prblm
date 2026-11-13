@@ -7,18 +7,30 @@ their own modules in subdirectories, and depend on a released version of the roo
 ## Tags
 
 - The root module is tagged `vX.Y.Z`, for example `v0.1.0`.
-- A module in a subdirectory is tagged `<dir>/vX.Y.Z`, for example `gin/v0.1.0`. Go resolves a
-  module's versions from tags with its directory as the prefix.
+- A module in a subdirectory is tagged `<dir>/vX.Y.Z`. Go resolves a module's versions from tags
+  with its directory as the prefix:
+
+  | Module | Directory | Tag |
+  |---|---|---|
+  | `github.com/kartaladev/prblm` | `.` | `vX.Y.Z` |
+  | `github.com/kartaladev/prblm/ginprblm` | `ginprblm/` | `ginprblm/vX.Y.Z` |
+  | `github.com/kartaladev/prblm/fiberprblm` | `fiberprblm/` | `fiberprblm/vX.Y.Z` |
+
 - Tag the root module first. A module that depends on a new core feature is released only after
   the core release it needs, and its `go.mod` requires that version.
+- `internal/paritytest` is an unpublished test module. It is never tagged, and it keeps its
+  `replace` directives so that it always compares the adapters in the repository.
 
 ## Before tagging
 
-1. Run the full check from the repository root:
+1. Run the full check in every module, from the repository root:
 
    ```sh
-   go test -race ./... && go vet ./... && golangci-lint run ./... \
-     && GOWORK=off go test ./... && ./.github/scripts/check-core-deps.sh
+   ./.github/scripts/check-core-deps.sh && ./.github/scripts/check-no-fiber.sh . ginprblm
+   for module in . ginprblm fiberprblm internal/paritytest; do
+     (cd "$module" && go test -race ./... && go vet ./... && golangci-lint run ./... \
+       && GOWORK=off go test ./...) || break
+   done
    for target in windows/amd64 darwin/arm64 js/wasm wasip1/wasm plan9/amd64; do
      GOOS="${target%/*}" GOARCH="${target#*/}" go vet ./...
    done
@@ -28,7 +40,11 @@ their own modules in subdirectories, and depend on a released version of the roo
    not against the workspace.
 2. Move the `[Unreleased]` entries in `CHANGELOG.md` under a heading for the new version and date.
 3. In a module other than the root, make sure `go.mod` requires a released root version and has
-   no `replace` directive pointing into the repository.
+   no `replace` directive pointing into the repository. Until the first core release, `ginprblm`
+   and `fiberprblm` replace the core with `../`: remove that line and require the tagged core
+   (`go get github.com/kartaladev/prblm@vX.Y.Z` with `GOWORK=off`) before tagging them.
+   Consumers ignore `replace` directives, so a published module that still has one cannot be
+   built.
 
 ## Tagging
 
@@ -37,7 +53,13 @@ git tag -a v0.1.0 -m "prblm v0.1.0"   # the root module
 git push origin v0.1.0
 ```
 
-For a module in a subdirectory, use the directory prefix: `git tag -a gin/v0.1.0 -m "gin v0.1.0"`.
+For a module in a subdirectory, use the directory prefix:
+
+```sh
+git tag -a ginprblm/v0.1.0 -m "ginprblm v0.1.0"
+git tag -a fiberprblm/v0.1.0 -m "fiberprblm v0.1.0"
+git push origin ginprblm/v0.1.0 fiberprblm/v0.1.0
+```
 
 ## Checking the release
 
@@ -45,6 +67,8 @@ After the push, confirm that the Go toolchain resolves the version outside the w
 
 ```sh
 GOWORK=off go list -m github.com/kartaladev/prblm@v0.1.0
+GOWORK=off go list -m github.com/kartaladev/prblm/ginprblm@v0.1.0
+GOWORK=off go list -m github.com/kartaladev/prblm/fiberprblm@v0.1.0
 ```
 
 To rehearse this before pushing, point the module path at a local clone that carries the tag, and
@@ -56,8 +80,11 @@ export GIT_CONFIG_GLOBAL=$(mktemp) GOMODCACHE=$(mktemp -d)
 git config --file "$GIT_CONFIG_GLOBAL" protocol.file.allow always
 git config --file "$GIT_CONFIG_GLOBAL" url."file://$PWD".insteadOf https://github.com/kartaladev/prblm
 cd "$(mktemp -d)"   # outside the repository and its go.work
-GOWORK=off GOPROXY=direct GONOSUMDB=github.com/kartaladev/prblm GOFLAGS='-mod=mod -modcacherw' \
-  go list -m github.com/kartaladev/prblm@v0.1.0
+for module in github.com/kartaladev/prblm github.com/kartaladev/prblm/ginprblm \
+  github.com/kartaladev/prblm/fiberprblm; do
+  GOWORK=off GOPROXY=direct GONOSUMDB=github.com/kartaladev/prblm GOFLAGS='-mod=mod -modcacherw' \
+    go list -m "$module@v0.1.0"
+done
 ```
 
 Tags are immutable once published: the module proxy and checksum database keep the first content

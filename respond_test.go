@@ -508,3 +508,92 @@ func BenchmarkRespond_XML(b *testing.B) {
 		b.Run("accept="+accept, func(b *testing.B) { benchmarkRespond(b, accept) })
 	}
 }
+
+// problem-response / Scenario: Headers on the response, as adapters merge
+// them into a framework's header (design D2 of add-framework-adapters).
+func TestResponse_MergeInto(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		dst      http.Header
+		src      http.Header
+		expected http.Header
+	}{
+		{
+			name:     "response header replaces the handler's",
+			dst:      http.Header{"Content-Type": {"text/plain"}, "X-Request-Id": {"r1"}},
+			src:      http.Header{"Content-Type": {"application/problem+json"}},
+			expected: http.Header{"Content-Type": {"application/problem+json"}, "X-Request-Id": {"r1"}},
+		},
+		{
+			name:     "vary merged without duplicates",
+			dst:      http.Header{"Vary": {"Origin, accept"}},
+			src:      http.Header{"Vary": {"Accept"}},
+			expected: http.Header{"Vary": {"Origin, accept"}},
+		},
+		{
+			name:     "vary adds accept to the handler's names",
+			dst:      http.Header{"Vary": {"Origin"}},
+			src:      http.Header{"Vary": {"Accept"}},
+			expected: http.Header{"Vary": {"Origin", "Accept"}},
+		},
+		{
+			name:     "handler cache-control kept",
+			dst:      http.Header{"Cache-Control": {"max-age=5"}},
+			src:      http.Header{"Cache-Control": {"no-store"}},
+			expected: http.Header{"Cache-Control": {"max-age=5"}},
+		},
+		{
+			name:     "response cache-control used when the handler set none",
+			dst:      http.Header{},
+			src:      http.Header{"Cache-Control": {"no-store"}},
+			expected: http.Header{"Cache-Control": {"no-store"}},
+		},
+		{
+			name:     "empty response header changes nothing",
+			dst:      http.Header{"X-Request-Id": {"r1"}},
+			src:      nil,
+			expected: http.Header{"X-Request-Id": {"r1"}},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			res := prblm.Response{Header: tt.src}
+			res.MergeInto(tt.dst)
+
+			if !maps.EqualFunc(tt.dst, tt.expected, slices.Equal[[]string]) {
+				t.Errorf("MergeInto: header = %v, want %v", tt.dst, tt.expected)
+			}
+		})
+	}
+}
+
+func TestResponse_MergeInto_NilDestination(t *testing.T) {
+	t.Parallel()
+
+	res := prblm.Response{Header: http.Header{"Content-Type": {"application/problem+json"}}}
+
+	// Nothing to merge into: it must not panic.
+	res.MergeInto(nil)
+}
+
+func TestResponse_MergeInto_NoAliasing(t *testing.T) {
+	t.Parallel()
+
+	res := prblm.Response{Header: http.Header{"X-Trace": {"t1"}, "Cache-Control": {"no-store"}}}
+	dst := http.Header{}
+
+	res.MergeInto(dst)
+
+	for name, want := range map[string]string{"X-Trace": "t1", "Cache-Control": "no-store"} {
+		dst[name][0] = "changed"
+
+		if got := res.Header.Get(name); got != want {
+			t.Errorf("response header %s = %q after changing the destination, want %q", name, got, want)
+		}
+	}
+}

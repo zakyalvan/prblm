@@ -9,7 +9,7 @@ permissions:
   contents: read
 
 jobs:
-  test:
+  deps:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -18,10 +18,28 @@ jobs:
           go-version-file: go.mod
       - name: core has no third-party requirements
         run: ./.github/scripts/check-core-deps.sh
+      - name: fiber stays out of the core and gin graphs
+        run: ./.github/scripts/check-no-fiber.sh . ginprblm
+
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        module: [., ginprblm, fiberprblm, internal/paritytest]
+    defaults:
+      run:
+        working-directory: ${{ matrix.module }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: ${{ matrix.module }}/go.mod
       - name: vet
         run: go vet ./...
       - name: vet (other platforms)
         # Platform-specific code (syscall errors) must build everywhere.
+        if: matrix.module == '.'
         run: |
           for target in windows/amd64 darwin/arm64 js/wasm wasip1/wasm plan9/amd64; do
             GOOS="${target%/*}" GOARCH="${target#*/}" go vet ./...
@@ -33,11 +51,16 @@ jobs:
 
   lint:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        module: [., ginprblm, fiberprblm, internal/paritytest]
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-go@v6
         with:
-          go-version-file: go.mod
+          go-version-file: ${{ matrix.module }}/go.mod
       - uses: golangci/golangci-lint-action@v8
         with:
           version: v2.15.0
+          working-directory: ${{ matrix.module }}

@@ -31,7 +31,8 @@ The first release, planned as v0.1.0.
   `ErrEncoding` (a problem that could not be encoded).
 - `Respond`, the framework-neutral response step, with `Accept` negotiation between JSON and XML,
   `Vary` and `Cache-Control` headers, protected content headers, and a constant fallback when
-  encoding fails.
+  encoding fails. `Response.MergeInto` merges a response's headers into a framework's headers by
+  the same rules as the net/http adapter, so every adapter produces the same headers.
 - The net/http adapter: `Wrap` for handlers that return errors, `Write` for standard handlers, and
   opt-in panic recovery with `Recover` and `PanicError`. `io.Copy` through `Wrap` keeps the
   underlying writer's `ReadFrom`, so net/http still uses sendfile.
