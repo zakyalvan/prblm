@@ -54,6 +54,19 @@
 // and WithTagNameFuncBlankOmit makes the validator leave that "" out of the
 // namespace instead of using the Go type name.
 //
+// gin's binding validator has no tag name function. Register [JSONName] on
+// its engine before the first request, since the validator caches names per
+// type:
+//
+//	if v, ok := binding.Validator.Engine().(*validator.Validate); ok {
+//		v.RegisterTagNameFunc(validatormap.JSONName)
+//	}
+//
+// gin creates that engine without WithTagNameFuncBlankOmit, so an embedded
+// struct's Go name stays in its fields' pointers ("#/Base/name"); replace
+// binding.Validator with a validator created with that option to flatten
+// embedded structs too.
+//
 // A pointer is an RFC 6901 JSON Pointer in URI fragment form: slice indexes
 // and map keys are tokens, "~" and "/" in a key are escaped as "~0" and
 // "~1", and other characters are percent-encoded ("#/meta/caf%C3%A9").

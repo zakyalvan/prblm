@@ -556,6 +556,19 @@ h := prblm.NewHandler(prblm.WithMappers(validatormap.Mapper()))
 entries carry a `field` (the Go namespace) instead of a pointer, which would be wrong. A problem
 never mixes the two, so read `pointer` and fall back to `field`.
 
+gin's binding validator has no tag name function, so its entries carry `field`. Register
+`JSONName` on gin's engine before the first request (the validator caches names per type):
+
+```go
+if v, ok := binding.Validator.Engine().(*validator.Validate); ok {
+	v.RegisterTagNameFunc(validatormap.JSONName)
+}
+```
+
+gin creates its engine without `WithTagNameFuncBlankOmit`, so an embedded struct's Go name stays in
+its fields' pointers (`#/Base/name`). To flatten embedded structs too, replace `binding.Validator`
+with a validator created with that option.
+
 `validatormap.WithTranslator` picks a translator per request; a missing or failing translation falls
 back to `failed validation: <tag>`. A translator that panics still gives the 422, and the
 `*prblm.PanicError` becomes the problem's cause, which the `OnError` hook can find with `errors.As`.
