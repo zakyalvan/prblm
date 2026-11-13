@@ -6,4 +6,6 @@ use (
 	./ginprblm
 	./internal/paritytest
 	./mappers/gormmap
+	./mappers/pgxmap
+	./mappers/validatormap
 )
