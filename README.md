@@ -66,6 +66,38 @@ handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 })
 ```
 
+## Returning common errors
+
+For common outcomes, return one of the package's sentinel errors, directly or wrapped, and the
+handler answers with the matching problem: no mapper to register. *(Mirrors `ExampleErrNotFound`.)*
+
+```go
+handler := h.Wrap(func(_ http.ResponseWriter, r *http.Request) error {
+	// The wrap text is for the logs; the client gets the fixed detail.
+	return fmt.Errorf("vessel %s: %w", r.PathValue("id"), prblm.ErrNotFound)
+})
+```
+
+| Sentinel | Status | Detail |
+|---|---|---|
+| `ErrNotFound` | 404 | `The requested resource was not found.` |
+
+Each problem is `about:blank` with the status phrase as title and the fixed detail. The wrap text,
+the error string and any wrapped cause never reach the client; the `OnError` hook receives the
+error as returned.
+
+- A sentinel is found as `errors.Is` reports it: wrapped with `%w`, joined with `errors.Join`, or
+  reported by the `Is` method of your own error type. Test for it with `errors.Is`, not `==`.
+- Your own code comes first: a problem or describer in the chain, a scoped mapper or a consumer
+  mapper such as `prblm.Is(prblm.ErrNotFound, ...)` replaces the default problem.
+- A sentinel beats a `WithStatus` hint: `prblm.WithStatus(prblm.ErrNotFound, 400)` is a 404.
+- When an error matches several sentinels, the lowest status wins; a sentinel wins over a standard
+  library error, such as `context.DeadlineExceeded`, in the same chain.
+- `WithoutBuiltins()` turns the sentinels off with the other built-ins.
+- The sentinels are your application's classification. A data layer's not-found error, such as
+  `sql.ErrNoRows`, is not one of them: map it, or wrap it with the sentinel where you decide it
+  means "not found".
+
 ## Mapping errors
 
 `Resolve` tries these steps in order, and the first that recognizes the error wins:
@@ -73,8 +105,9 @@ handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 1. a `*Problem` or `Describer` in the error chain describes itself
 2. mappers scoped to the request with `ScopeMappers`, newest scope first
 3. the handler's own mappers (`WithMappers`), in registration order
-4. built-in mappers for malformed, truncated or oversized request bodies and for deadline errors
-   (`WithoutBuiltins` turns them off)
+4. built-in mappers: for the sentinel errors such as `ErrNotFound` (see
+   [Returning common errors](#returning-common-errors)), then for malformed, truncated or oversized
+   request bodies and for deadline errors (`WithoutBuiltins` turns them off)
 5. a status hint attached with `WithStatus`
 6. the safe fallback: a 500 with no detail
 
@@ -507,6 +540,7 @@ themselves differ:
 |---|---|---|---|
 | Unmapped errors | 500 with title "Internal Server Error" and no detail | never leak internals | consumer mappers |
 | Built-in mappers | on | common request body errors get a correct 4xx without setup | `WithoutBuiltins()` |
+| Sentinel errors (`ErrNotFound`, ...) | mapped to their status, `about:blank`, with a fixed detail | a returned sentinel works without setup and leaks no wrap text | a consumer mapper; `WithoutBuiltins()` |
 | `type` | `about:blank`, omitted from the document | the RFC 9457 default | set per problem |
 | Type namespace | none: types written as given | no change for code that writes full type URIs | `WithNamespace` |
 | Invalid relative type (with a namespace) | `about:blank` with the status phrase as title, and a note to the hook | a broken link is worse than none | — |

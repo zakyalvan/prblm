@@ -263,6 +263,27 @@ func ExampleWithStatus() {
 	// {"title":"Forbidden","status":403}
 }
 
+func ExampleErrNotFound() {
+	h := prblm.NewHandler()
+
+	handler := h.Wrap(func(_ http.ResponseWriter, r *http.Request) error {
+		// The wrap text is for the logs; the client gets the fixed detail.
+		return fmt.Errorf("vessel %s: %w", r.PathValue("id"), prblm.ErrNotFound)
+	})
+
+	mux := http.NewServeMux()
+	mux.Handle("GET /v1/vessels/{id}", handler)
+
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/v1/vessels/7", http.NoBody))
+
+	fmt.Println(rec.Code)
+	fmt.Println(rec.Body.String())
+	// Output:
+	// 404
+	// {"title":"Not Found","status":404,"detail":"The requested resource was not found.","instance":"/v1/vessels/7"}
+}
+
 func ExampleScopeMappers() {
 	errLocked := errors.New("locked")
 	h := prblm.NewHandler()

@@ -3,6 +3,7 @@ package paritytest_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -37,6 +38,9 @@ var returned = map[string]error{
 	caseMapped:      errVesselNotFound,
 	caseUnmapped:    errors.New("pq: password=hunter2"),
 	caseBlacklisted: errBlacklisted,
+	caseSentinel:    fmt.Errorf("vessel 7: %w", prblm.ErrNotFound),
+	// gin raises this case with its own hint, c.AbortWithError.
+	caseSentinelHint: prblm.WithStatus(prblm.ErrNotFound, http.StatusBadRequest),
 }
 
 // Each case is selected with the query parameter "case", which the
@@ -47,6 +51,10 @@ const (
 	casePanic       = "panic"
 	caseHint        = "hint"
 	caseBlacklisted = "blacklisted"
+	caseSentinel    = "sentinel"
+	// caseSentinelHint raises prblm.ErrNotFound with a 400 status hint,
+	// which the sentinel overrides.
+	caseSentinelHint = "sentinel-hint"
 )
 
 // The paths the servers answer the cases at, and the documentation paths.
@@ -110,6 +118,8 @@ func ginServer(t *testing.T, opts []prblm.Option) string {
 			panic("boom")
 		case caseHint:
 			_ = c.AbortWithError(http.StatusForbidden, errors.New("x"))
+		case caseSentinelHint:
+			_ = c.AbortWithError(http.StatusBadRequest, prblm.ErrNotFound)
 		default:
 			_ = c.Error(returned[name])
 		}
@@ -239,6 +249,10 @@ func TestParity(t *testing.T) {
 		{name: "panic under recovery", path: pathVessel, caseName: casePanic, status: http.StatusInternalServerError, contentType: "application/problem+json"},
 		{name: "mapped error as xml", path: pathVessel, caseName: caseMapped, accept: "application/problem+xml", status: http.StatusNotFound, contentType: "application/problem+xml"},
 		{name: "status hint", path: pathVessel, caseName: caseHint, status: http.StatusForbidden, contentType: "application/problem+json"},
+		// error-sentinels / Scenario: Adapter parity.
+		{name: "sentinel", path: pathVessel, caseName: caseSentinel, contains: `"detail":"The requested resource was not found."`, status: http.StatusNotFound, contentType: "application/problem+json"},
+		{name: "sentinel as xml", path: pathVessel, caseName: caseSentinel, accept: "application/problem+xml", status: http.StatusNotFound, contentType: "application/problem+xml"},
+		{name: "sentinel over a status hint", path: pathVessel, caseName: caseSentinelHint, contains: `"detail":"The requested resource was not found."`, status: http.StatusNotFound, contentType: "application/problem+json"},
 		{
 			name:        "resolved type",
 			path:        pathContract,

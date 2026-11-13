@@ -89,8 +89,8 @@ func NewHandler(opts ...Option) *Handler {
 //  1. the outermost *Problem or [Describer] in the chain of err
 //  2. the mappers scoped to ctx with [ScopeMappers], newest scope first
 //  3. the handler's own mappers, in registration order
-//  4. the built-in mappers for request body and deadline errors
-//     (see [WithoutBuiltins])
+//  4. the built-in mappers: the sentinel errors such as [ErrNotFound], then
+//     request body and deadline errors (see [WithoutBuiltins])
 //  5. a status hint attached with [WithStatus]
 //  6. the fallback: a 500 problem that carries none of the error's text
 //
