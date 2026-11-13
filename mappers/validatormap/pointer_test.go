@@ -2,7 +2,6 @@ package validatormap
 
 import (
 	"errors"
-	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -13,15 +12,8 @@ import (
 
 // jsonValidator returns a validator that reports JSON tag names.
 func jsonValidator() *validator.Validate {
-	v := validator.New(validator.WithRequiredStructEnabled())
-	v.RegisterTagNameFunc(func(f reflect.StructField) string {
-		name, _, _ := strings.Cut(f.Tag.Get("json"), ",")
-		if name == "-" {
-			return ""
-		}
-
-		return name
-	})
+	v := validator.New(validator.WithRequiredStructEnabled(), validator.WithTagNameFuncBlankOmit())
+	v.RegisterTagNameFunc(JSONName)
 
 	return v
 }
@@ -89,8 +81,11 @@ func TestPointer(t *testing.T) {
 
 			var got []string
 
-			for _, fe := range fieldErrors(t, jsonValidator(), tt.value) {
-				p, f := location(fe)
+			ves := fieldErrors(t, jsonValidator(), tt.value)
+			jsonNames := usesJSONNames(ves)
+
+			for _, fe := range ves {
+				p, f := location(fe, jsonNames)
 				if f != "" {
 					t.Errorf("location(%q) field = %q, want a pointer", fe.Namespace(), f)
 				}
@@ -118,8 +113,11 @@ func TestPointer(t *testing.T) {
 
 		var got []string
 
-		for _, fe := range fieldErrors(t, jsonValidator(), req) {
-			p, _ := location(fe)
+		ves := fieldErrors(t, jsonValidator(), req)
+		jsonNames := usesJSONNames(ves)
+
+		for _, fe := range ves {
+			p, _ := location(fe, jsonNames)
 			got = append(got, p)
 		}
 
@@ -136,7 +134,7 @@ func TestPointer(t *testing.T) {
 			t.Fatal("Var() did not fail with ValidationErrors")
 		}
 
-		if p, f := location(ves[0]); p != "#" || f != "" {
+		if p, f := location(ves[0], usesJSONNames(ves)); p != "#" || f != "" {
 			t.Errorf("location() = (%q, %q), want (\"#\", \"\")", p, f)
 		}
 	})
@@ -221,7 +219,7 @@ func TestField(t *testing.T) {
 
 			ves := fieldErrors(t, validator.New(), tt.value)
 
-			p, f := location(ves[0])
+			p, f := location(ves[0], usesJSONNames(ves))
 			if p != "" || f != tt.want {
 				t.Errorf("location() = (%q, %q), want (\"\", %q)", p, f, tt.want)
 			}

@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"reflect"
 	"strings"
 
 	"github.com/go-playground/locales/en"
@@ -23,21 +22,9 @@ type vesselRequest struct {
 	Crew int    `json:"crew" validate:"min=1"`
 }
 
-// jsonNames makes v report JSON field names, so pointers can be built.
-func jsonNames(v *validator.Validate) {
-	v.RegisterTagNameFunc(func(f reflect.StructField) string {
-		name, _, _ := strings.Cut(f.Tag.Get("json"), ",")
-		if name == "-" {
-			return ""
-		}
-
-		return name
-	})
-}
-
 func ExampleMapper() {
-	v := validator.New(validator.WithRequiredStructEnabled())
-	jsonNames(v)
+	v := validator.New(validator.WithRequiredStructEnabled(), validator.WithTagNameFuncBlankOmit())
+	v.RegisterTagNameFunc(validatormap.JSONName)
 
 	h := prblm.NewHandler(prblm.WithMappers(validatormap.Mapper()))
 
@@ -71,8 +58,8 @@ func ExampleWithTranslator() {
 	english, _ := uni.GetTranslator("en")
 	indonesian, _ := uni.GetTranslator("id")
 
-	v := validator.New(validator.WithRequiredStructEnabled())
-	jsonNames(v)
+	v := validator.New(validator.WithRequiredStructEnabled(), validator.WithTagNameFuncBlankOmit())
+	v.RegisterTagNameFunc(validatormap.JSONName)
 
 	// Translations are registered on the validator that validates requests.
 	for trans, text := range map[ut.Translator]string{english: "{0} is required", indonesian: "{0} wajib diisi"} {

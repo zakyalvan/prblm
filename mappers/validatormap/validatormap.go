@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"runtime/debug"
 	"slices"
 
 	ut "github.com/go-playground/universal-translator"
@@ -68,7 +69,9 @@ func WithTitle(title string) Option {
 // request, for example from the locale a middleware stored in ctx. With a
 // translator, each entry's detail is the validator's translation of the
 // failed tag. Without one, because fn is nil or returns nil, or because fn
-// panics, the detail is "failed validation: <tag>".
+// panics, the detail is "failed validation: <tag>". A panic, in fn or in a
+// translation, is recorded as the problem's cause (see the package
+// documentation), where the handler's OnError hook can find it.
 func WithTranslator(fn func(ctx context.Context) ut.Translator) Option {
 	return func(c *config) {
 		c.translator = fn
@@ -104,17 +107,25 @@ func Mapper(opts ...Option) prblm.Mapper {
 			return nil
 		}
 
-		trans := cfg.translatorFor(ctx)
+		var panics []error
+
+		trans := cfg.translatorFor(ctx, &panics)
+		jsonNames := usesJSONNames(ves)
 
 		entries := make([]entry, 0, len(ves))
 		for _, fe := range ves {
-			p, f := location(fe)
-			entries = append(entries, entry{Detail: message(fe, trans), Pointer: p, Field: f})
+			p, f := location(fe, jsonNames)
+			entries = append(entries, entry{Detail: message(fe, trans, &panics), Pointer: p, Field: f})
 		}
 
 		// Clipping makes append copy, so concurrent calls
 		// never share the backing array of fixed.
-		return prblm.New(cfg.status, append(slices.Clip(fixed), prblm.WithExt("errors", entries))...)
+		fields := append(slices.Clip(fixed), prblm.WithExt("errors", entries))
+		if len(panics) > 0 {
+			fields = append(fields, prblm.WithCause(errors.Join(panics...)))
+		}
+
+		return prblm.New(cfg.status, fields...)
 	})
 }
 
@@ -122,25 +133,33 @@ func Mapper(opts ...Option) prblm.Mapper {
 // there is none or the consumer's function panics. A panic is contained
 // here rather than by the handler: the translation is an enhancement, and
 // losing the whole validation problem to a 500 would be worse for clients.
-func (c *config) translatorFor(ctx context.Context) (trans ut.Translator) {
+// The panic is appended to *panics, which become the problem's cause, so
+// the handler's OnError hook still learns of it.
+func (c *config) translatorFor(ctx context.Context, panics *[]error) ut.Translator {
 	if c.translator == nil {
 		return nil
 	}
 
-	defer func() {
-		if recover() != nil {
-			trans = nil
-		}
-	}()
+	defer recoverInto(panics)
 
 	return c.translator(ctx)
+}
+
+// recoverInto, deferred, recovers a panic and appends it to *panics as a
+// *prblm.PanicError with the stack of the panicking frames, as the handler
+// describes the panics it contains. The deferring function then returns its
+// zero results, since the panic came before it assigned them.
+func recoverInto(panics *[]error) {
+	if v := recover(); v != nil {
+		*panics = append(*panics, &prblm.PanicError{Value: v, Stack: debug.Stack()})
+	}
 }
 
 // message returns the detail of an entry: the translation of fe by trans,
 // or "failed validation: <tag>". It never uses the rejected value, the
 // parameter or fe.Error(), which can carry them and the Go struct names.
-func message(fe validator.FieldError, trans ut.Translator) string {
-	if text, ok := translate(fe, trans); ok {
+func message(fe validator.FieldError, trans ut.Translator, panics *[]error) string {
+	if text, ok := translate(fe, trans, panics); ok {
 		return text
 	}
 
@@ -150,19 +169,15 @@ func message(fe validator.FieldError, trans ut.Translator) string {
 // translate returns the translation of fe by trans, and false when there is
 // no translator, the translator has no translation for the tag (the
 // validator then falls back to fe.Error(), which names the Go struct), or
-// the translation panics.
-func translate(fe validator.FieldError, trans ut.Translator) (text string, ok bool) {
+// the translation panics. A panic is appended to *panics.
+func translate(fe validator.FieldError, trans ut.Translator, panics *[]error) (string, bool) {
 	if trans == nil {
 		return "", false
 	}
 
-	defer func() {
-		if recover() != nil {
-			text, ok = "", false
-		}
-	}()
+	defer recoverInto(panics)
 
-	text = fe.Translate(trans)
+	text := fe.Translate(trans)
 
 	return text, text != fe.Error()
 }

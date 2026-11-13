@@ -29,8 +29,8 @@ type signupRequest struct {
 
 // newValidator returns a validator that reports JSON tag names.
 func newValidator() *validator.Validate {
-	v := validator.New(validator.WithRequiredStructEnabled())
-	jsonNames(v)
+	v := validator.New(validator.WithRequiredStructEnabled(), validator.WithTagNameFuncBlankOmit())
+	v.RegisterTagNameFunc(validatormap.JSONName)
 
 	return v
 }

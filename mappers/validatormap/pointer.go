@@ -2,29 +2,55 @@ package validatormap
 
 import (
 	"net/url"
+	"slices"
 	"strings"
 
 	"github.com/go-playground/validator/v10"
 )
 
 // location returns where fe failed: a JSON Pointer in URI fragment form
-// when the validator reports JSON names, or otherwise the field's namespace
-// without the root struct name. Exactly one of them is non-empty.
+// when jsonNames is set, or otherwise the field's namespace without the
+// root struct name. Exactly one of them is non-empty. An error from
+// validating a single variable has no namespace and points at the whole
+// document.
 //
-// The validator reports JSON names only when a tag name function is
-// registered; without one, Namespace and StructNamespace are equal. They are
-// also equal when the JSON names coincide with the Go names, and then the
-// field name is still correct. An error from validating a single variable
-// has no namespace and points at the whole document.
-func location(fe validator.FieldError) (pointer, field string) {
+// jsonNames tells whether the validator reports JSON names. The caller
+// decides it once for all the entries of a problem (see [usesJSONNames]),
+// because a single entry whose JSON name equals its Go name looks the same
+// as one from a validator without a tag name function.
+func location(fe validator.FieldError, jsonNames bool) (pointer, field string) {
 	ns, structNS := fe.Namespace(), fe.StructNamespace()
-	if ns != "" && ns == structNS {
-		// Without JSON names, a single segment is a field of an anonymous
-		// struct: a root never comes without a field.
-		return "", relative(ns, strings.ContainsAny(ns, ".["))
+	if ns == "" {
+		return "#", ""
 	}
 
-	return pointerOf(relative(ns, firstSegment(ns) == firstSegment(structNS))), ""
+	// The root struct name starts both namespaces, so with JSON names their
+	// first segments match only when there is a root. With equal
+	// namespaces, a single segment is a field of an anonymous struct: a root
+	// never comes without a field.
+	hasRoot := strings.ContainsAny(ns, ".[")
+	if ns != structNS {
+		hasRoot = firstSegment(ns) == firstSegment(structNS)
+	}
+
+	rel := relative(ns, hasRoot)
+	if !jsonNames {
+		return "", rel
+	}
+
+	return pointerOf(rel), ""
+}
+
+// usesJSONNames reports whether the validator that produced ves reports
+// JSON names. The validator has no getter for its tag name function, but
+// with one registered, the namespace of JSON names differs from that of Go
+// names in at least one entry, unless every failed field's JSON name equals
+// its Go name; those entries then get a field, which still names them
+// correctly.
+func usesJSONNames(ves validator.ValidationErrors) bool {
+	return slices.ContainsFunc(ves, func(fe validator.FieldError) bool {
+		return fe.Namespace() != fe.StructNamespace()
+	})
 }
 
 // relative returns the namespace ns without its root struct name when it

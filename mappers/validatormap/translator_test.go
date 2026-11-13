@@ -3,6 +3,7 @@ package validatormap_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -52,6 +53,17 @@ func translated(t *testing.T) (english, indonesian ut.Translator, err error) {
 	return english, indonesian, v.Struct(req)
 }
 
+// recordPanics returns an OnError hook that records into *dst the
+// *prblm.PanicError in the cause of the problem being sent, if any.
+// Recovered translator panics never reach the client, only the hook.
+func recordPanics(dst *[]*prblm.PanicError) func(context.Context, error, *prblm.Problem) {
+	return func(_ context.Context, _ error, p *prblm.Problem) {
+		if pe, ok := errors.AsType[*prblm.PanicError](p); ok {
+			*dst = append(*dst, pe)
+		}
+	}
+}
+
 func TestMapper_Translator(t *testing.T) {
 	t.Parallel()
 
@@ -59,9 +71,10 @@ func TestMapper_Translator(t *testing.T) {
 
 	// Scenario: Translator choices.
 	tests := []struct {
-		name string
-		want string
-		opts []validatormap.Option
+		name      string
+		want      string
+		opts      []validatormap.Option
+		wantPanic bool
 	}{
 		{
 			name: "indonesian",
@@ -79,9 +92,10 @@ func TestMapper_Translator(t *testing.T) {
 			want: "failed validation: min",
 		},
 		{
-			name: "panics",
-			opts: []validatormap.Option{validatormap.WithTranslator(func(context.Context) ut.Translator { panic("no locale") })},
-			want: "failed validation: min",
+			name:      "panics",
+			opts:      []validatormap.Option{validatormap.WithTranslator(func(context.Context) ut.Translator { panic("no locale") })},
+			want:      "failed validation: min",
+			wantPanic: true,
 		},
 		{name: "nil function", opts: []validatormap.Option{validatormap.WithTranslator(nil)}, want: "failed validation: min"},
 		{name: "no translator function", want: "failed validation: min"},
@@ -91,10 +105,17 @@ func TestMapper_Translator(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			got := serve(t, prblm.NewHandler(prblm.WithMappers(validatormap.Mapper(tt.opts...))), "", err)
+			var panics []*prblm.PanicError
+
+			h := prblm.NewHandler(prblm.WithMappers(validatormap.Mapper(tt.opts...)), prblm.OnError(recordPanics(&panics)))
+			got := serve(t, h, "", err)
 
 			if got.status != 422 {
 				t.Fatalf("status = %d, want 422", got.status)
+			}
+
+			if gotPanic := len(panics) == 1 && panics[0].Value == "no locale"; gotPanic != tt.wantPanic {
+				t.Errorf("hook found panics %v, want the translator panic = %v", panics, tt.wantPanic)
 			}
 
 			want := `[{"detail":"` + tt.want + `","pointer":"#/age"}]`
@@ -162,8 +183,14 @@ func TestMapper_TranslatorGaps(t *testing.T) {
 		Age  int    `json:"age" validate:"min=1"`
 	}
 
+	var panics []*prblm.PanicError
+
 	m := validatormap.Mapper(validatormap.WithTranslator(func(context.Context) ut.Translator { return english }))
-	got := serve(t, prblm.NewHandler(prblm.WithMappers(m)), "", v.Struct(SignupRequest{}))
+	got := serve(t, prblm.NewHandler(prblm.WithMappers(m), prblm.OnError(recordPanics(&panics))), "", v.Struct(SignupRequest{}))
+
+	if len(panics) != 1 || panics[0].Value != "translation failed" || len(panics[0].Stack) == 0 {
+		t.Errorf("hook found panics %v, want the translation panic with its stack", panics)
+	}
 
 	want := `[{"detail":"failed validation: required","pointer":"#/name"},` +
 		`{"detail":"failed validation: min","pointer":"#/age"}]`

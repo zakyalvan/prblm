@@ -42,25 +42,31 @@
 // # Pointers need JSON names
 //
 // The validator reports Go field names unless it has a tag name function.
-// Register one that returns the JSON name, so the mapper can build pointers:
+// Register [JSONName], which names fields as encoding/json does, on a
+// validator that omits blank names, so the mapper can build pointers:
 //
-//	v := validator.New(validator.WithRequiredStructEnabled())
-//	v.RegisterTagNameFunc(func(f reflect.StructField) string {
-//		name, _, _ := strings.Cut(f.Tag.Get("json"), ",")
-//		if name == "-" {
-//			return ""
-//		}
-//		return name
-//	})
+//	v := validator.New(validator.WithRequiredStructEnabled(), validator.WithTagNameFuncBlankOmit())
+//	v.RegisterTagNameFunc(validatormap.JSONName)
+//
+// Both are needed for embedded structs. encoding/json promotes the fields of
+// an embedded struct without a json tag to the enclosing object, so its
+// field Name is at "#/name"; [JSONName] returns "" for the embedded struct,
+// and WithTagNameFuncBlankOmit makes the validator leave that "" out of the
+// namespace instead of using the Go type name.
 //
 // A pointer is an RFC 6901 JSON Pointer in URI fragment form: slice indexes
 // and map keys are tokens, "~" and "/" in a key are escaped as "~0" and
 // "~1", and other characters are percent-encoded ("#/meta/caf%C3%A9").
 // Without JSON names, a pointer would be wrong, so each entry instead has a
 // field member: the Go namespace without the root struct
-// ("Items[0].Name"). Validate named struct types: for an anonymous struct
-// the validator reports no root name, which the mapper can only partly tell
-// apart from a named one.
+// ("Items[0].Name"). The validator has no getter for its tag name function,
+// so the mapper decides once per problem: when any entry's JSON namespace
+// differs from its Go namespace, every entry has a pointer, otherwise every
+// entry has a field. A problem never mixes the two. When every failed
+// field's JSON name equals its Go name, the entries have fields, which
+// still name the fields correctly. Validate named struct types: for an
+// anonymous struct the validator reports no root name, which the mapper can
+// only partly tell apart from a named one.
 //
 // # Translation
 //
@@ -70,8 +76,17 @@
 // validator's translations packages). A tag without a translation, a
 // translator function that returns nil, and a translation or function that
 // panics all fall back to the default detail, so a missing translation never
-// turns a 422 into a 500. Such panics are recovered without being reported:
-// wrap the function to log them.
+// turns a 422 into a 500. A recovered panic becomes the cause of the
+// problem, as a [*prblm.PanicError] with the panic value and stack (joined
+// with [errors.Join] when there are several). The cause never reaches the
+// client, but the handler's OnError hook receives the problem, so it can
+// find the panic:
+//
+//	prblm.OnError(func(ctx context.Context, err error, p *prblm.Problem) {
+//		if pe, ok := errors.AsType[*prblm.PanicError](p); ok {
+//			slog.ErrorContext(ctx, "translator panicked", "panic", pe.Value)
+//		}
+//	})
 //
 // There is no limit on the number of entries other than what the validator
 // returns, which is at most one per field.
