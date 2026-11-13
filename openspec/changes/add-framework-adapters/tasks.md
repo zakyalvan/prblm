@@ -119,17 +119,17 @@
 
 ## 7. Slice: fiber Scope and Recovery
 
-- [ ] 7.1 Add `Scope` (fiber-adapter / Scenario: Route group scope, Scenario: Degenerate scopes); verify `go test -run TestScope` passes
+- [x] 7.1 Add `Scope` (fiber-adapter / Scenario: Route group scope, Scenario: Degenerate scopes); verify `go test -run TestScope` passes
   - RED: route rows and degenerate rows
   - GREEN: `Scope(m...)` with `c.SetContext`
   - REFACTOR: /simplify
-- [ ] 7.2 Add `Recovery` returning a safe error (fiber-adapter / Scenario: Recovery with the adapter's error handler); verify `go test -run TestRecovery_ErrorHandler` passes
+- [x] 7.2 Add `Recovery` returning a safe error (fiber-adapter / Scenario: Recovery with the adapter's error handler); verify `go test -run TestRecovery_ErrorHandler` passes
   - RED: four chain rows including value, stack and `io.ErrClosedPipe` matching
   - GREEN: `Recovery()` with named return, `recoveredError` wrapping `*prblm.PanicError`
   - REFACTOR: /simplify
-- [ ] 7.3 Never leak the panic through fiber's default error handler (fiber-adapter / Scenario: Recovery with fiber's default error handler); verify `go test -run TestRecovery_DefaultHandler` passes
-- [ ] 7.4 Document `Scope` and `Recovery` (godoc, `ExampleRecovery`, pairing with `ErrorHandler`); verify `go test -run Example` passes
-- [ ] 7.5 Verify slice 7 end to end and check `go tool cover -func` covers `Scope` and `Recovery` branches; run gopls diagnostics, `-race`, vet, lint, `GOWORK=off`
+- [x] 7.3 Never leak the panic through fiber's default error handler (fiber-adapter / Scenario: Recovery with fiber's default error handler); verify `go test -run TestRecovery_DefaultHandler` passes
+- [x] 7.4 Document `Scope` and `Recovery` (godoc, `ExampleRecovery`, pairing with `ErrorHandler`); verify `go test -run Example` passes
+- [x] 7.5 Verify slice 7 end to end and check `go tool cover -func` covers `Scope` and `Recovery` branches; run gopls diagnostics, `-race`, vet, lint, `GOWORK=off`
 
 ## 8. Slice: cross-adapter parity and documentation
 

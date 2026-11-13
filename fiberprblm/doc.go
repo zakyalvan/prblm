@@ -32,6 +32,27 @@
 // 400–599 is ignored. Its message is never sent, so "Cannot GET /x" and
 // messages such as fiber.NewError(403, "token abc expired") stay private.
 //
+// # Route groups
+//
+// [Scope] attaches mappers to the routes of a group only, ahead of the
+// handler's own mappers:
+//
+//	contracts := app.Group("/v1/contracts", fiberprblm.Scope(
+//		prblm.Status(ErrLocked, http.StatusLocked),
+//	))
+//
+// # Panic recovery
+//
+// Recovery is opt-in. [Recovery] turns a panic into an error returned to the
+// error handler; pair it with [ErrorHandler], so the client gets the core's
+// safe 500 problem and the OnError hook gets the panic value and stack:
+//
+//	app := fiber.New(fiber.Config{ErrorHandler: fiberprblm.ErrorHandler(h)})
+//	app.Use(fiberprblm.Recovery())
+//
+// With fiber's default error handler instead, the client gets a plain-text
+// 500 "Internal Server Error": the panic value never leaks either way.
+//
 // # Safe defaults
 //
 // The problem semantics are the core's, unchanged: an error no mapper

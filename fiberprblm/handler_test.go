@@ -441,7 +441,7 @@ func TestErrorHandler_Concurrent(t *testing.T) {
 	app.Get("/a", func(fiber.Ctx) error { return ErrVesselNotFound })
 	app.Get("/b", func(fiber.Ctx) error { return fiber.ErrUnauthorized })
 
-	base := listen(t, app)
+	client, base := listen(t, app)
 	want := map[string]int{"/a": http.StatusNotFound, "/b": http.StatusUnauthorized}
 
 	var wg sync.WaitGroup
@@ -455,35 +455,15 @@ func TestErrorHandler_Concurrent(t *testing.T) {
 		// Each request reports with t.Errorf only: t.Fatal must not be
 		// called outside the test goroutine.
 		wg.Go(func() {
-			req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, base+path, http.NoBody)
+			status, p, err := fetchProblem(t.Context(), client, base+path)
 			if err != nil {
-				t.Errorf("%s: new request: %v", path, err)
+				t.Errorf("%s: %v", path, err)
 
 				return
 			}
 
-			res, err := http.DefaultClient.Do(req)
-			if err != nil {
-				t.Errorf("%s: request: %v", path, err)
-
-				return
-			}
-
-			defer func() { _ = res.Body.Close() }()
-
-			if res.StatusCode != want[path] {
-				t.Errorf("%s: status = %d, want %d", path, res.StatusCode, want[path])
-			}
-
-			p, err := prblm.Parse(res)
-			if err != nil {
-				t.Errorf("%s: Parse: %v", path, err)
-
-				return
-			}
-
-			if p.Status != want[path] || p.Instance != path {
-				t.Errorf("%s: problem %d %q, want %d %q", path, p.Status, p.Instance, want[path], path)
+			if status != want[path] || p.Status != want[path] || p.Instance != path {
+				t.Errorf("%s: response %d, problem %d %q, want %d %q", path, status, p.Status, p.Instance, want[path], path)
 			}
 		})
 	}

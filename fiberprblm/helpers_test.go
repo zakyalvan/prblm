@@ -116,9 +116,10 @@ func problemOf(t *testing.T, r response) *prblm.Problem {
 	return p
 }
 
-// listen serves app on a real loopback listener for the test and returns
-// its base URL.
-func listen(t *testing.T, app *fiber.App) string {
+// listen serves app on a real loopback listener for the test and returns a
+// client for it and its base URL. The client's idle connections are closed
+// before the app shuts down, which otherwise waits for them.
+func listen(t *testing.T, app *fiber.App) (*http.Client, string) {
 	t.Helper()
 
 	var lc net.ListenConfig
@@ -130,9 +131,13 @@ func listen(t *testing.T, app *fiber.App) string {
 
 	go func() { _ = app.Listener(ln, fiber.ListenConfig{DisableStartupMessage: true}) }()
 
-	t.Cleanup(func() { _ = app.Shutdown() })
+	client := &http.Client{Transport: &http.Transport{}}
 
-	return "http://" + ln.Addr().String()
+	// Cleanups run last first: idle connections close, then the app stops.
+	t.Cleanup(func() { _ = app.Shutdown() })
+	t.Cleanup(client.CloseIdleConnections)
+
+	return client, "http://" + ln.Addr().String()
 }
 
 // serveX serves handler at GET /x in an app using the adapter, with a
@@ -144,4 +149,24 @@ func serveX(t *testing.T, handler fiber.Handler, opts ...prblm.Option) response 
 	app.Get("/x", handler)
 
 	return test(t, app, get(t, http.MethodGet, "/x"))
+}
+
+// fetchProblem sends GET url with client and decodes the problem. It
+// returns errors rather than failing the test, so goroutines can use it.
+func fetchProblem(ctx context.Context, client *http.Client, url string) (int, *prblm.Problem, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, http.NoBody)
+	if err != nil {
+		return 0, nil, err
+	}
+
+	res, err := client.Do(req)
+	if err != nil {
+		return 0, nil, err
+	}
+
+	defer func() { _ = res.Body.Close() }()
+
+	p, err := prblm.Parse(res)
+
+	return res.StatusCode, p, err
 }
