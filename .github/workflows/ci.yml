@@ -1,0 +1,43 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - name: core has no third-party requirements
+        run: ./.github/scripts/check-core-deps.sh
+      - name: vet
+        run: go vet ./...
+      - name: vet (other platforms)
+        # Platform-specific code (syscall errors) must build everywhere.
+        run: |
+          for target in windows/amd64 darwin/arm64 js/wasm wasip1/wasm plan9/amd64; do
+            GOOS="${target%/*}" GOARCH="${target#*/}" go vet ./...
+          done
+      - name: test (workspace, race)
+        run: go test -race ./...
+      - name: test (module only)
+        run: GOWORK=off go test ./...
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - uses: golangci/golangci-lint-action@v8
+        with:
+          version: v2.15.0

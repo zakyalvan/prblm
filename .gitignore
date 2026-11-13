@@ -1,0 +1,12 @@
+# Coverage and test output
+*.out
+*.test
+coverage.html
+
+# Local editor and OS files
+.DS_Store
+.idea/
+.vscode/
+
+# Personal Claude Code settings
+.claude/settings.local.json

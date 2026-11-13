@@ -1,0 +1,30 @@
+# Workflow: Gherkin scenarios with Examples, Gall's Law slices, Murphy's Law
+# failure coverage, safe defaults and TDD are defined by the schema itself
+# (openspec/schemas/gherkin-driven). This file holds what is specific to prblm.
+schema: gherkin-driven
+
+context: |
+  prblm is a Go library (module github.com/kartaladev/prblm, Go 1.27) that renders Go errors as
+  RFC 9457 problem details for net/http, gin and fiber v3, with opt-in mapper plugins.
+  It is consumed by other teams' services, so its public API and defaults are commitments.
+  CLAUDE.md holds the binding project rules (safe defaults, idiomatic Go, TDD, hot-path coverage,
+  Murphy's Law, Gall's Law, gopls navigation); planning artifacts must comply with them.
+  Multi-module repository: the core module has no third-party dependencies; each framework
+  adapter and each mapper plugin that needs a dependency is its own module.
+
+rules:
+  proposal:
+    - Name the zero-configuration behavior a consumer gets and confirm it leaks nothing - no error text on 5xx, no stack traces, no database internals.
+    - Flag any change to public API or to a default as a compatibility decision.
+  specs:
+    - Use concrete HTTP values in Examples tables - status codes, exact header values, media types and JSON/XML bodies or the members that matter.
+    - Cover each relevant framework (net/http, gin, fiber v3) in Examples rows when behavior must be identical across them.
+    - Include rows for faulty consumer code - mappers, enrichers and hooks that return nil, error or panic.
+  design:
+    - Slice 1 must be the smallest end-to-end working path the change adds - for the core, a Go error to an RFC 9457 response through net/http with no third-party dependency; for an adapter or plugin, one error through that adapter or plugin using the released core.
+    - Keep third-party dependencies out of the core module; name the module each new dependency goes in.
+    - Hot paths for this library include error resolution, problem finalization and enrichment, encoding, Accept negotiation, response writing in each adapter, panic recovery and each plugin's match and no-match paths.
+  tasks:
+    - Tests are Go table-driven tests (one case per Examples row) run with -race; use httptest for net/http and gin and app.Test for fiber v3.
+    - Each slice runs go vet, golangci-lint and go test -race for every module it touches, with GOWORK=off for modules that will be released.
+    - Before finishing each slice, use gopls (go_diagnostics on changed files, go_symbol_references before changing a definition).

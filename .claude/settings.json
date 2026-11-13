@@ -1,0 +1,7 @@
+{
+  "enabledPlugins": {
+    "cc-skills-golang@samber": true,
+    "security-guidance@anthropic-plugin-directory": true
+  },
+  "enabledMcpjsonServers": ["gopls"]
+}

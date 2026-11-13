@@ -1,0 +1,378 @@
+name: gherkin-driven
+version: 1
+description: >-
+  Spec-driven workflow with Gherkin scenarios and Examples tables, planned as
+  evolving working slices (Gall's Law), failure-first (Murphy's Law), safe
+  defaults with opt-in customization, and TDD implementation -
+  proposal → specs → design → tasks
+artifacts:
+  - id: proposal
+    generates: proposal.md
+    description: Initial proposal document outlining the change
+    template: proposal.md
+    instruction: |
+      Create the proposal document that establishes WHY this change is needed.
+
+      Sections:
+      - **Why**: 1-2 sentences on the problem or opportunity. What problem does this solve? Why now?
+      - **What Changes**: Bullet list of changes. Be specific about new capabilities, modifications, or removals. Mark breaking changes with **BREAKING**.
+      - **Defaults and Customization**: What a consumer gets with zero configuration
+        (the safe, opinionated default), and what they can opt in to change. Any opt-in
+        that loosens a safety default (exposes internals, disables a check) must be
+        named here explicitly.
+      - **Capabilities**: Identify which specs will be created or modified:
+        - **New Capabilities**: List capabilities being introduced. Each becomes a new `specs/<capability-path>/spec.md`. Name each capability for a durable system behavior (for example, `user-auth`), not the work in this change (for example, `add-login-endpoint`). Choose a cohesive boundary that can own related requirements as the system evolves; avoid broad catch-all capabilities. Use kebab-case for path segments you introduce (e.g., `user-auth` or `identity/user-auth`) and follow the project's existing spec organization.
+        - **Modified Capabilities**: List existing capabilities whose REQUIREMENTS are changing. Only include if spec-level behavior changes (not just implementation details). Each needs a delta spec file. Use the exact existing path under `openspec/specs/`. Leave empty if no requirement changes.
+      - **Scope by Gall's Law**: Name the simplest version of this change that works
+        end to end, and list what is deliberately left for later changes. If the
+        change is too large to deliver as a sequence of working slices, split it into
+        several changes instead.
+      - **Impact**: Affected code, APIs, dependencies, or systems.
+
+      IMPORTANT: The Capabilities section is critical. It creates the contract between
+      proposal and specs phases. Research existing specs before filling this in:
+      run `openspec list --specs` for the project's capability inventory, then
+      `openspec show "<spec-id>" --type spec --json --no-scenarios` for any that
+      look related - that returns a capability's purpose and requirement texts
+      without pulling whole spec files into context. Append `--store "<id>"` to
+      both commands only for a registered standalone store, and keep `--type
+      spec`: a change and a spec sharing a name is otherwise an ambiguous-item
+      error. `openspec list` without `--specs` lists in-flight changes, not
+      specs - it never shows what the project already covers. Reuse an existing
+      capability's exact path instead of introducing a near-duplicate name.
+      The filtered read is only an overview. Before deciding what is already
+      covered or what should change, read each relevant spec in full, including
+      scenarios, with `openspec show "<spec-id>" --type spec` (same `--store` rule).
+      Each capability listed here will need a corresponding spec file.
+
+      Every change must either declare at least one capability (new or
+      modified) or explicitly opt out of specs: `openspec validate` rejects a
+      change with zero deltas unless the change's `.openspec.yaml` sets
+      `skip_specs: true`. Use `skip_specs: true` only when no spec-level
+      behavior changes (pure refactor, tooling, docs) - specs describe
+      behavior, so if behavior does not change, no spec should change either.
+      Do not invent a requirement just to satisfy validation.
+
+      Keep it concise (1-2 pages). Focus on the "why" not the "how" -
+      implementation details belong in design.md.
+
+      This is the foundation - specs, design, and tasks all build on this.
+    requires: []
+
+  - id: specs
+    generates: "specs/**/*.md"
+    description: Behavior specifications with Gherkin scenarios and Examples tables
+    template: spec.md
+    instruction: |
+      Create specification files that define WHAT the system should do.
+
+      A spec is a behavior contract, not an implementation plan.
+
+      Good spec content:
+      - Observable behavior users or downstream systems rely on
+      - Inputs, outputs, and error conditions
+      - External constraints (security, privacy, reliability, compatibility)
+      - Scenarios that can be tested or explicitly validated
+
+      Avoid in specs:
+      - Internal class/function names
+      - Step-by-step implementation details
+      - Detailed execution plans (those belong in design.md or tasks.md)
+
+      Quick test: if the implementation can change without changing externally
+      visible behavior, it likely does not belong in the spec.
+
+      Create one spec file per capability listed in the proposal's Capabilities section.
+      `<capability-path>` is the spec directory relative to `specs/` (for example,
+      `user-auth` or `identity/user-auth`). Preserve the full path:
+      - New capabilities: use the exact path from the proposal at `specs/<capability-path>/spec.md`. Any path segment newly introduced in the proposal must be kebab-case. Follow the project's existing organization; do not add a new domain level when the project uses a flat layout.
+      - Modified capabilities: use the exact existing path from `openspec/specs/<capability-path>/` when creating the delta at `specs/<capability-path>/spec.md`. Run `openspec list --specs` to confirm that path before writing the delta, appending `--store "<id>"` only for a registered standalone store - a mistyped or invented path targets a capability that does not exist rather than the one you meant. Do not move or rename the capability.
+
+      Write the spec files one at a time, so the user sees progress and an
+      interrupted run keeps the files it already wrote:
+      - Before writing anything, compare the capabilities the proposal lists
+        with the `specs/<capability-path>/spec.md` files that already exist,
+        and start with the first capability that has no file. Do not rewrite
+        an existing file unless the user asks you to.
+      - Before each file, say in one line which capability you are writing.
+      - Write each file as soon as you have drafted it. Do not plan every file
+        before writing the first.
+      - Stop when every capability the proposal lists has its file.
+
+      There must be at least one spec file unless the change's `.openspec.yaml`
+      sets `skip_specs: true` (no spec-level behavior change) - `openspec validate`
+      rejects a zero-delta change without that marker. If the proposal lists no
+      capabilities and `skip_specs` is not set, revisit the proposal first.
+
+      Delta operations (use ## headers):
+      - **ADDED Requirements**: New capabilities
+      - **MODIFIED Requirements**: Changed behavior - MUST include full updated content
+      - **REMOVED Requirements**: Deprecated features - MUST include **Reason** and **Migration**
+      - **RENAMED Requirements**: Name changes only - use FROM:/TO: format
+
+      Requirement format:
+      - Each requirement: `### Requirement: <name>` followed by description
+      - Use SHALL/MUST for normative requirements (avoid should/may)
+      - Keep each requirement's description (the text between `### Requirement:`
+        and its first scenario) to 500 characters or fewer, one behavior per
+        requirement. Move examples and edge cases into scenarios and Examples
+        tables; split a requirement that covers several behaviors. Under MODIFIED,
+        keep the existing requirement block whole; never split, trim or rewrite
+        existing text just to meet the length.
+      - Every requirement MUST have at least one scenario.
+      - When a requirement has a safe default and an opt-in alternative, specify
+        both: one scenario for the default, one for the explicit opt-in.
+
+      Scenario format - Gherkin with Examples (MANDATORY):
+      - Each scenario header is exactly `#### Scenario: <name>` (4 hashtags; 3
+        hashtags or bullets fail silently). Do not write `Scenario Outline:` -
+        Gherkin 6+ accepts `Scenario` with Examples, and OpenSpec only checks
+        steps under the `Scenario:` label.
+      - Steps are markdown bullets with the Gherkin keyword in bold, Title case:
+        `- **Given** ...`, `- **When** ...`, `- **Then** ...`, `- **And** ...`,
+        `- **But** ...`. Order: Given (context), When (one action), Then
+        (observable outcome). And/But only continue the previous step.
+      - NEVER put the steps in a fenced code block (```gherkin). OpenSpec masks
+        fenced text, so the steps would not count and `openspec validate --strict`
+        fails.
+      - Every scenario MUST have a When step and a Then step. Given is required
+        whenever the outcome depends on prior state or configuration.
+      - Variable values in steps are parameters written as `<name>` in backticks,
+        e.g. `<status>`. Each parameter MUST be a column of the scenario's
+        Examples table, and each column MUST be used by a step.
+      - Every scenario MUST end with an Examples table:
+        `##### Examples:` (5 hashtags, optionally followed by a short label),
+        then a markdown table with a header row and one row per case. A scenario
+        may have several Examples tables (e.g. `##### Examples: accepted` and
+        `##### Examples: rejected`).
+      - A scenario with no varying value still gets an Examples table with its
+        single concrete case, so every scenario maps to a table-driven test.
+      - Write table cells as literal, concrete values (exact strings, status codes,
+        headers). Put code-like values in backticks. Use `(none)` for an absent
+        value and `(empty)` for an empty one, never a blank cell.
+
+      Murphy's Law - failure coverage (MANDATORY):
+      For every requirement, ask "what can go wrong?" and cover the relevant cases
+      as scenarios or Examples rows, not only the happy path:
+      - absent, nil, zero and empty inputs
+      - malformed or hostile input (wrong type, invalid format, oversized, unexpected encoding)
+      - boundary values (first/last, min/max, exactly at a limit, one past it)
+      - partial failure (a dependency fails midway, output already started, cancellation, timeout)
+      - concurrency (simultaneous use, shared state)
+      - misuse by the consumer (wrong configuration, faulty callbacks that error or panic)
+      - security and privacy (internal details must not leak to callers)
+      Skip a category only when it cannot apply to the requirement.
+
+      New capabilities only: the delta spec's first section is `## Purpose` -
+      one or two sentences (50+ characters, or `openspec validate --strict`
+      reports it as too brief) describing what the capability is for. Archive
+      copies it into the main spec it creates; without it the new main spec is
+      left with a `TBD ... Update Purpose after archive` placeholder to fill in
+      by hand. Do NOT add `## Purpose` to a delta for an existing capability -
+      that spec already has one and the delta's is ignored. To change an
+      existing capability's Purpose - including a leftover `TBD` placeholder -
+      edit `<planningHome.root>/openspec/specs/<capability-path>/spec.md`
+      directly. `planningHome.root` comes from the `openspec instructions ...
+      --json` response. Always use it rather than a repo-relative path.
+
+      MODIFIED requirements workflow:
+      1. Locate the existing requirement in `<planningHome.root>/openspec/specs/<capability-path>/spec.md`
+      2. Copy the ENTIRE requirement block (from `### Requirement:` through all scenarios and Examples tables)
+      3. Paste under `## MODIFIED Requirements` and edit to reflect new behavior
+      4. Ensure header text matches exactly (whitespace-insensitive)
+
+      Common pitfall: Using MODIFIED with partial content loses detail at archive time.
+      If adding new concerns without changing existing behavior, use ADDED instead.
+
+      Example (a new capability, so its first section is `## Purpose`):
+      ```
+      # Spec Delta
+
+      ## Purpose
+
+      Lets users take their data out of the product in a portable format.
+
+      ## ADDED Requirements
+
+      ### Requirement: User can export data
+      The system SHALL export a user's data as CSV and SHALL refuse exports for unknown users.
+
+      #### Scenario: Export by user
+      - **Given** a user `<user>` with `<rows>` stored records
+      - **When** `<user>` requests an export
+      - **Then** the response status is `<status>`
+      - **And** the CSV contains `<lines>` lines
+
+      ##### Examples: valid
+      | user  | rows | status | lines |
+      |-------|------|--------|-------|
+      | alice | 2    | 200    | 3     |
+      | bob   | 0    | 200    | 1     |
+
+      ##### Examples: unknown user
+      | user    | rows   | status | lines  |
+      |---------|--------|--------|--------|
+      | (empty) | (none) | 404    | (none) |
+      ```
+
+      Specs must be testable: each scenario becomes one table-driven test, and
+      each Examples row becomes one test case.
+    requires:
+      - proposal
+
+  - id: design
+    generates: design.md
+    description: Technical design organized as evolving working slices
+    template: design.md
+    instruction: |
+      Create the design document that explains HOW to implement the change.
+
+      When to include design.md (create only if any apply):
+      - Cross-cutting change (multiple modules/packages) or new architectural pattern
+      - New external dependency or significant data model changes
+      - Security, performance, or migration complexity
+      - Ambiguity that benefits from technical decisions before coding
+
+      Sections:
+      - **Context**: Only the current state and constraints needed to explain the approach. Reference the proposal for motivation instead of restating it (e.g., "See proposal.md - Why").
+      - **Goals / Non-Goals**: What this design achieves and explicitly excludes. Don't restate the proposal's scope - add only design-level boundaries.
+      - **Slices (Gall's Law)**: The ordered list of working slices. Slice 1 is the
+        simplest system that works end to end. Each later slice adds one capability
+        to a system that already works. For each slice: what works at its end, which
+        spec scenarios it satisfies, and which hot paths it introduces. No slice may
+        depend on code that only becomes useful in a later slice.
+      - **Decisions**: Key technical choices with rationale (why X over Y?). Include
+        alternatives considered for each decision. For each decision, add
+        **Failure modes**: what can go wrong with it (Murphy's Law) and how the design
+        handles each case.
+      - **Defaults**: The safe default for each configurable behavior and why it is
+        the default; how each opt-in is exposed.
+      - **Hot Paths**: The code paths every request (or every call) goes through,
+        including their error branches. These must be covered by tests.
+      - **Risks / Trade-offs**: Known limitations, things that could go wrong. Format: [Risk] → Mitigation
+      - **Migration Plan**: Steps to deploy, rollback strategy (if applicable)
+      - **Open Questions**: Unknowns that can safely be answered later without
+        changing the specs, the approach, or the task breakdown. Omit if none.
+
+      Open questions are for genuinely deferrable unknowns, not decisions you
+      skipped. If a question would change the specs, the chosen approach, or
+      the task breakdown, resolve it now - ask the user instead of guessing.
+
+      Self-review before finishing, from two points of view:
+      - Gall's Law: does slice 1 work on its own? Does any decision require several
+        unfinished parts to come together before anything works? Simplify until not.
+      - Murphy's Law: for every decision and hot path, is every relevant failure
+        handled and traceable to a spec scenario or Examples row? Add the missing ones
+        to the specs rather than leaving them implicit.
+
+      Focus on architecture and approach, not line-by-line implementation.
+      The proposal covers why and what; design covers how. Reference the
+      proposal for motivation and the specs for requirements - if a section
+      would only restate them, point to them instead.
+    requires:
+      - proposal
+
+  - id: tasks
+    generates: tasks.md
+    description: TDD implementation checklist grouped by working slice
+    template: tasks.md
+    instruction: |
+      Create the task list that breaks down the implementation work.
+
+      Before writing tasks, check design.md for Open Questions. If any of them
+      would change what gets built, resolve them with the user first - do not
+      bake an unstated assumption into the task list.
+
+      **IMPORTANT: Follow the template below for tracked tasks.** The apply phase parses
+      checkbox format to track progress. A box holding only `x` counts as done,
+      upper or lower case and with any spacing, so `- [ x]` is done too. Every
+      other marker, including `- [~]`, `- [-]` and an empty `- []`, reads as
+      unfinished. A line with no checkbox is not tracked at all.
+
+      Structure - one group per working slice (Gall's Law):
+      - Each `## N. Slice: <what works at the end>` group matches a slice from
+        design.md, in the same order. Group by slice, never by layer.
+      - Every group ends in a working, tested, releasable state. Its last task
+        verifies the slice end to end and checks hot-path coverage
+        (`go test -coverprofile` + `go tool cover -func`, inspecting the hot-path
+        functions the slice introduced).
+      - A scaffolding group (module setup, CI) is allowed only as group 1 and
+        only for what slice 1 needs.
+
+      Tasks - TDD, one behavior per task:
+      - Each behavior task is a checkbox `- [ ] N.M <behavior>` naming the spec
+        scenario it implements (`capability / Scenario: name`), followed by
+        three indented, untracked sub-bullets:
+        - `RED:` the failing test to write first: test name, and which Examples
+          rows become its table cases, including the failure rows. Run it and
+          confirm it fails for the expected reason.
+        - `GREEN:` the minimal production change that makes it pass.
+        - `REFACTOR:` the smell to look for and the refactoring to apply
+          (Fowler's catalog), then run `/simplify` on the changed code. Tests
+          stay green after every step.
+      - Order behavior tasks so each one builds on a passing state. Failure-path
+        scenarios get their own tasks; never fold them into "and handle errors".
+      - Documentation (godoc, Example tests, README) is a task inside the slice
+        that introduces the API, not a final group.
+      - Each task MUST state how to verify completion in its checkbox text (the
+        test passing, a command, an observable behavior).
+
+      Example:
+      ```
+      # Tasks
+
+      ## 1. Slice: one sentinel error renders as a JSON problem over net/http
+
+      - [ ] 1.1 Map a registered sentinel error to its status (error-mapping / Scenario: Sentinel mapped); verify `go test -run TestResolve_Sentinel` passes
+        - RED: `TestResolve_Sentinel` with rows for matched, wrapped and unrelated errors; fails because Resolve does not exist
+        - GREEN: minimal Mapper + Resolve with first-match lookup
+        - REFACTOR: remove duplication between rows (Extract Function), then /simplify
+      - [ ] 1.2 Verify slice 1 end to end with an httptest round trip and confirm Resolve and Write are covered in `go tool cover -func`
+      ```
+
+      When applicable, append workflow follow-up as plain bullets, for example:
+      ```
+      ## Workflow follow-up
+
+      - Archive the change after the project's review requirements are satisfied.
+      - Verify the archived result.
+      ```
+
+      Reference specs for what needs to be built, design for how to build it.
+    requires:
+      - specs
+      - design
+
+apply:
+  requires: [tasks]
+  tracks: tasks.md
+  instruction: |
+    Read context files, then work through pending tasks in order, one slice at a time.
+
+    For every behavior task, follow TDD strictly:
+    1. RED - write the failing test first, with one table case per Examples row
+       of the referenced scenario. Run it and confirm it fails for the expected
+       reason. Never write production code without a failing test that demands it.
+    2. GREEN - write the minimal code that makes it pass. Run the package's tests.
+    3. REFACTOR - with tests green, name the smell and apply refactorings from
+       Fowler's catalog in small steps, running tests after each; then run
+       `/simplify` on the changed code. Never refactor on red.
+    Mark a task complete only after its verification passes.
+
+    At the end of each slice, before moving on:
+    - Run the whole module's tests with `-race`, `go vet` and the linter.
+    - Check hot-path coverage with `go test -coverprofile` and `go tool cover -func`;
+      add tests for any uncovered hot-path branch, especially error branches.
+    - Review the slice from two points of view: Murphy's Law (what can still go
+      wrong that no test covers?) and Gall's Law (does the system still work as a
+      whole; did anything get built ahead of need?). Fix findings before the next slice.
+
+    Defect claims need proof. Before reporting any suspected bug or defect (in this
+    code, a dependency or a framework), reproduce it with a test that fails because
+    of it, and run it. Report the test name, the command and the failing output
+    with the claim. A claim whose test passes is not a finding; a claim that cannot
+    be automated is reported as unverified, with the reason. The reproducing test
+    stays as the RED step of the fix.
+
+    Pause if you hit blockers or need clarification. If a slice cannot be made to
+    work, return to the last working state and simplify rather than pushing on.
