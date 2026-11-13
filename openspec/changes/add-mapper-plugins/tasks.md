@@ -51,42 +51,42 @@
 
 ## 4. Slice: pgxmap module
 
-- [ ] 4.1 Create `mappers/pgxmap/go.mod` (requires `github.com/jackc/pgx/v5` and the core through `replace github.com/kartaladev/prblm => ../..` until the release), add it to `go.work` and CI; verify the job passes on an empty package and the root dependency check still passes
-- [ ] 4.2 Map SQLSTATE codes to problems when registered (pgx-error-mapping / Scenario: Registered or not, Scenario: Mapped codes); verify `go test -run TestMapper_Codes` passes
+- [x] 4.1 Create `mappers/pgxmap/go.mod` (requires `github.com/jackc/pgx/v5` and the core through `replace github.com/kartaladev/prblm => ../..` until the release), add it to `go.work` and CI; verify the job passes on an empty package and the root dependency check still passes
+- [x] 4.2 Map SQLSTATE codes to problems when registered (pgx-error-mapping / Scenario: Registered or not, Scenario: Mapped codes); verify `go test -run TestMapper_Codes` passes
   - RED: one row per mapped code with exact status and detail, built from real `*pgconn.PgError` values wrapped with `fmt.Errorf`; fails because `pgxmap.Mapper` does not exist
   - GREEN: `errors.AsType[*pgconn.PgError]`, nil guard, read-only default table
   - REFACTOR: /simplify
-- [ ] 4.3 Leave unlisted codes and degenerate inputs unmatched (pgx-error-mapping / Scenario: Unmapped codes fall through, Scenario: Degenerate inputs); verify `go test -run 'TestMapper_(Unmapped|Degenerate)'` passes
+- [x] 4.3 Leave unlisted codes and degenerate inputs unmatched (pgx-error-mapping / Scenario: Unmapped codes fall through, Scenario: Degenerate inputs); verify `go test -run 'TestMapper_(Unmapped|Degenerate)'` passes
   - RED: unlisted, empty and garbage codes; nil, typed-nil `*pgconn.PgError`, `pgx.ErrNoRows`, look-alike text, joined error rows
   - GREEN: no-match return paths
   - REFACTOR: /simplify
-- [ ] 4.4 Hide database internals by default (pgx-error-mapping / Scenario: Duplicate email); verify `go test -run TestMapper_NoLeak` passes
+- [x] 4.4 Hide database internals by default (pgx-error-mapping / Scenario: Duplicate email); verify `go test -run TestMapper_NoLeak` passes
   - RED: both rows asserting none of the forbidden strings appear in the JSON and XML bodies
   - GREEN: confirm only table details are used
   - REFACTOR: /simplify
-- [ ] 4.5 Add `Retry-After` with validation (pgx-error-mapping / Scenario: Retry-After header, Scenario: Invalid Retry-After setting); verify `go test -run TestMapper_RetryAfter` passes
+- [x] 4.5 Add `Retry-After` with validation (pgx-error-mapping / Scenario: Retry-After header, Scenario: Invalid Retry-After setting); verify `go test -run TestMapper_RetryAfter` passes
   - RED: default, configured and non-retryable rows checking the response header; 0 and -1 construction panics
   - GREEN: `WithRetryAfter`, header via `prblm.WithHeader`
   - REFACTOR: /simplify
-- [ ] 4.6 Add the explicit database-detail opt-in (pgx-error-mapping / Scenario: Detail exposure); verify `go test -run TestMapper_DatabaseDetail` passes
+- [x] 4.6 Add the explicit database-detail opt-in (pgx-error-mapping / Scenario: Detail exposure); verify `go test -run TestMapper_DatabaseDetail` passes
   - RED: exposed, default and empty-detail rows
   - GREEN: `WithDatabaseDetail` using only `pe.Detail`
   - REFACTOR: /simplify
-- [ ] 4.7 Add per-constraint problems (pgx-error-mapping / Scenario: Friendly duplicate email, Scenario: Invalid constraint registration); verify `go test -run TestMapper_Constraint` passes
+- [x] 4.7 Add per-constraint problems (pgx-error-mapping / Scenario: Friendly duplicate email, Scenario: Invalid constraint registration); verify `go test -run TestMapper_Constraint` passes
   - RED: matching, other-constraint, case-mismatch, nil-result and panic rows; empty-name and nil-function construction panics
   - GREEN: `WithConstraint` with exact-match lookup before the table
   - REFACTOR: /simplify
-- [ ] 4.8 Add per-code problems (pgx-error-mapping / Scenario: Code overrides); verify `go test -run TestMapper_CodeOverride` passes
+- [x] 4.8 Add per-code problems (pgx-error-mapping / Scenario: Code overrides); verify `go test -run TestMapper_CodeOverride` passes
   - RED: listed override, unlisted code added, nil result falling back to table, nil result for unlisted code
   - GREEN: `WithCode` consulted after constraints and before the table
   - REFACTOR: unify constraint and code lookups behind one ordered lookup (Consolidate Conditional Expression); /simplify
-- [ ] 4.9 Prove gorm pass-through to pgx (gorm-error-mapping / Scenario: gorm without translation, row "gorm mapper, PostgreSQL mapper"); verify a cross-plugin test in `mappers/pgxmap` (test-only requirement on `gormmap`) with a `*pgconn.PgError` returned through gorm's error path yields 409
-- [ ] 4.10 Write the `pgxmap` godoc (privacy rationale, `WithDatabaseDetail` warning, constraint and code examples) with `ExampleMapper` and `ExampleWithConstraint`; verify `go test -run Example` passes
-- [ ] 4.11 Verify slice 4 end to end (handler with `pgxmap` answering 409/422/503 with headers in JSON and XML) and check `go tool cover -func` covers the nil guard, constraint lookup, code override, table lookup, header and detail-opt-in branches; run vet, lint, `go test -race` and `GOWORK=off go test` for `mappers/pgxmap`; run gopls `go_diagnostics` on changed files
+- [x] 4.9 Prove gorm pass-through to pgx (gorm-error-mapping / Scenario: gorm without translation, row "gorm mapper, PostgreSQL mapper"); verify a cross-plugin test in `mappers/pgxmap` (test-only requirement on `gormmap`) with a `*pgconn.PgError` returned through gorm's error path yields 409
+- [x] 4.10 Write the `pgxmap` godoc (privacy rationale, `WithDatabaseDetail` warning, constraint and code examples) with `ExampleMapper` and `ExampleWithConstraint`; verify `go test -run Example` passes
+- [x] 4.11 Verify slice 4 end to end (handler with `pgxmap` answering 409/422/503 with headers in JSON and XML) and check `go tool cover -func` covers the nil guard, constraint lookup, code override, table lookup, header and detail-opt-in branches; run vet, lint, `go test -race` and `GOWORK=off go test` for `mappers/pgxmap`; run gopls `go_diagnostics` on changed files
 
 ## 5. Slice: validatormap module
 
-- [ ] 5.1 Create `mappers/validatormap/go.mod` (requires `github.com/go-playground/validator/v10`, `github.com/go-playground/universal-translator` and the core through `replace github.com/kartaladev/prblm => ../..` until the release; `github.com/go-playground/locales` for tests), add it to `go.work` and CI; verify the job passes on an empty package and the root dependency check still passes
+- [x] 5.1 Create `mappers/validatormap/go.mod` (requires `github.com/go-playground/validator/v10`, `github.com/go-playground/universal-translator` and the core through `replace github.com/kartaladev/prblm => ../..` until the release; `github.com/go-playground/locales` for tests), add it to `go.work` and CI; verify the job passes on an empty package and the root dependency check still passes
 - [ ] 5.2 Build JSON Pointers and the field fallback (validation-error-mapping / Scenario: Pointer building, Scenario: No tag name function); verify `go test -run 'TestPointer|TestField'` passes and `go test -fuzz FuzzPointer -fuzztime 30s` never panics
   - RED: every namespace row, using namespaces produced by validating real structs (with and without a tag name function) plus the single-variable row
   - GREEN: unexported tokenizer and RFC 6901 escaping with fragment percent-encoding; `Namespace() == StructNamespace()` fallback
