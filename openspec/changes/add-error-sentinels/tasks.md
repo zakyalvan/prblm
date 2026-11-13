@@ -56,24 +56,24 @@
 
 ## 2. Slice: client errors (400, 401, 403, 409)
 
-- [ ] 2.1 Map `ErrInvalidInput`, `ErrUnauthenticated`, `ErrPermissionDenied` and `ErrConflict` (error-sentinels / Scenario: Sentinel returned directly, Scenario: Error text, their rows); verify `go test -race -run 'TestSentinels_(Direct|ErrorText)'` passes
+- [x] 2.1 Map `ErrInvalidInput`, `ErrUnauthenticated`, `ErrPermissionDenied` and `ErrConflict` (error-sentinels / Scenario: Sentinel returned directly, Scenario: Error text, their rows); verify `go test -race -run 'TestSentinels_(Direct|ErrorText)'` passes
   - RED: add the four rows to both tables; they fail to compile, then fail with 500
   - GREEN: the four variables and their table rows, in ascending status order
   - REFACTOR: /simplify
-- [ ] 2.2 Keep their wrap text private and log it (error-sentinels / Scenario: Context added by the application stays private, `ErrPermissionDenied` rows in JSON and XML; Scenario: Logging the full error, `ErrConflict` row); verify `go test -race -run 'TestSentinels_(NoLeak|Hook)'` passes
+- [x] 2.2 Keep their wrap text private and log it (error-sentinels / Scenario: Context added by the application stays private, `ErrPermissionDenied` rows in JSON and XML; Scenario: Logging the full error, `ErrConflict` row); verify `go test -race -run 'TestSentinels_(NoLeak|Hook)'` passes
   - RED: the new rows
   - GREEN: nothing expected; fix any gap
   - REFACTOR: /simplify
-- [ ] 2.3 Let `ErrConflict` beat a nested hint (error-sentinels / Scenario: Sentinel and hint together, `ErrConflict` row); verify `go test -race -run TestSentinels_Hint` passes
+- [x] 2.3 Let `ErrConflict` beat a nested hint (error-sentinels / Scenario: Sentinel and hint together, `ErrConflict` row); verify `go test -race -run TestSentinels_Hint` passes
   - RED: the hint-inside row
   - GREEN: nothing expected
   - REFACTOR: /simplify
-- [ ] 2.4 Resolve chains with several matches (error-sentinels / Scenario: Several matches in one chain, the `ErrConflict`/`ErrNotFound` join row and the `ErrInvalidInput` + `*json.SyntaxError` row); verify `go test -race -run TestSentinels_Order` passes
+- [x] 2.4 Resolve chains with several matches (error-sentinels / Scenario: Several matches in one chain, the `ErrConflict`/`ErrNotFound` join row and the `ErrInvalidInput` + `*json.SyntaxError` row); verify `go test -race -run TestSentinels_Order` passes
   - RED: both rows; the second fails if the sentinel mapper doesn't run before the `*json.SyntaxError` built-in
   - GREEN: confirm the table order and the place of the sentinel mapper
   - REFACTOR: /simplify
-- [ ] 2.5 Document the four sentinels (when to use each; `ErrUnauthenticated` has no `WWW-Authenticate` and how to add one with a consumer mapper; `ErrPermissionDenied` versus `ErrNotFound` for hiding existence), add them to the README catalog table and the CHANGELOG entry, with `ExampleErrUnauthenticated` showing the consumer-mapper fix; verify `go test -run Example` passes
-- [ ] 2.6 Verify slice 2 end to end and check `go tool cover -func` still covers every branch of `mapSentinel`; run `gofmt`, `go vet`, `golangci-lint run ./...`, `go test -race ./...` and `GOWORK=off go test ./...` in the root module; run gopls `go_diagnostics` on changed files
+- [x] 2.5 Document the four sentinels (when to use each; `ErrUnauthenticated` has no `WWW-Authenticate` and how to add one with a consumer mapper; `ErrPermissionDenied` versus `ErrNotFound` for hiding existence), add them to the README catalog table and the CHANGELOG entry, with `ExampleErrUnauthenticated` showing the consumer-mapper fix; verify `go test -run Example` passes
+- [x] 2.6 Verify slice 2 end to end and check `go tool cover -func` still covers every branch of `mapSentinel`; run `gofmt`, `go vet`, `golangci-lint run ./...`, `go test -race ./...` and `GOWORK=off go test ./...` in the root module; run gopls `go_diagnostics` on changed files
 
 ## 3. Slice: request-state errors (412, 429)
 

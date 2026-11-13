@@ -60,7 +60,11 @@ func TestSentinels_Direct(t *testing.T) {
 		title    string
 		detail   string
 	}{
+		{name: "invalid input", err: prblm.ErrInvalidInput, expected: 400, title: "Bad Request", detail: "The request is invalid."},
+		{name: "unauthenticated", err: prblm.ErrUnauthenticated, expected: 401, title: "Unauthorized", detail: "Authentication is required."},
+		{name: "permission denied", err: prblm.ErrPermissionDenied, expected: 403, title: "Forbidden", detail: "You are not allowed to perform this action."},
 		{name: "not found", err: prblm.ErrNotFound, expected: 404, title: "Not Found", detail: "The requested resource was not found."},
+		{name: "conflict", err: prblm.ErrConflict, expected: 409, title: "Conflict", detail: "The request conflicts with the current state of the resource."},
 	}
 
 	for _, tt := range tests {
@@ -151,6 +155,19 @@ func TestSentinels_NoLeak(t *testing.T) {
 			forbidden: []string{"alice@example.com", "vessel 7", "prblm:"},
 		},
 		{
+			name:      "permission denied json",
+			err:       fmt.Errorf("user alice@example.com: %w", prblm.ErrPermissionDenied),
+			expected:  403,
+			forbidden: []string{"alice@example.com", "prblm:"},
+		},
+		{
+			name:      "permission denied xml",
+			err:       fmt.Errorf("user alice@example.com: %w", prblm.ErrPermissionDenied),
+			accept:    "application/problem+xml",
+			expected:  403,
+			forbidden: []string{"alice@example.com", "prblm:"},
+		},
+		{
 			name:      "custom error fields",
 			err:       &VesselMissingError{ID: 7, Owner: "alice"},
 			expected:  404,
@@ -187,6 +204,7 @@ func TestSentinels_Hook(t *testing.T) {
 		expected int
 	}{
 		{name: "wrapped not found", err: fmt.Errorf("vessel 7: %w", prblm.ErrNotFound), text: "vessel 7: prblm: not found", expected: 404},
+		{name: "conflict", err: prblm.ErrConflict, text: "prblm: conflict", expected: 409},
 	}
 
 	for _, tt := range tests {
@@ -214,7 +232,11 @@ func TestSentinels_ErrorText(t *testing.T) {
 		err  error
 		text string
 	}{
+		{name: "invalid input", err: prblm.ErrInvalidInput, text: "prblm: invalid input"},
+		{name: "unauthenticated", err: prblm.ErrUnauthenticated, text: "prblm: unauthenticated"},
+		{name: "permission denied", err: prblm.ErrPermissionDenied, text: "prblm: permission denied"},
 		{name: "not found", err: prblm.ErrNotFound, text: "prblm: not found"},
+		{name: "conflict", err: prblm.ErrConflict, text: "prblm: conflict"},
 	}
 
 	seen := make(map[string]bool, len(tests))
@@ -387,6 +409,12 @@ func TestSentinels_Hint(t *testing.T) {
 		detail   string
 	}{
 		{name: "hint outside", err: prblm.WithStatus(prblm.ErrNotFound, 400), expected: 404, detail: "The requested resource was not found."},
+		{
+			name:     "hint inside",
+			err:      fmt.Errorf("x: %w", prblm.WithStatus(prblm.ErrConflict, 422)),
+			expected: 409,
+			detail:   "The request conflicts with the current state of the resource.",
+		},
 		{name: "hint not an error status", err: prblm.WithStatus(prblm.ErrNotFound, 200), expected: 404, detail: "The requested resource was not found."},
 		{name: "built-ins disabled", opts: []prblm.Option{prblm.WithoutBuiltins()}, err: prblm.WithStatus(prblm.ErrNotFound, 400), expected: 400},
 	}
@@ -448,6 +476,8 @@ func TestSentinels_Order(t *testing.T) {
 		expected int
 		detail   string
 	}{
+		{name: "two sentinels", err: errors.Join(prblm.ErrConflict, prblm.ErrNotFound), expected: 404, detail: "The requested resource was not found."},
+		{name: "sentinel and json syntax error", err: fmt.Errorf("%w: %w", prblm.ErrInvalidInput, decodeErr(`{"age":}`)), expected: 400, detail: "The request is invalid."},
 		{name: "bare deadline", err: context.DeadlineExceeded, expected: 504},
 	}
 

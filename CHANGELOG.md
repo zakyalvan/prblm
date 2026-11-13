@@ -25,7 +25,8 @@ The first release, planned as v0.1.0.
   built-in mappers for malformed, truncated and oversized request bodies and deadline errors
   (`WithoutBuiltins`; a bare `io.EOF` is not mapped, because any reader can return it), status hints
   (`WithStatus`) and a safe 500 fallback.
-- Sentinel errors for common outcomes, to return or wrap: `ErrNotFound` (404). Each maps, with no
+- Sentinel errors for common outcomes, to return or wrap: `ErrInvalidInput` (400),
+  `ErrUnauthenticated` (401), `ErrPermissionDenied` (403), `ErrNotFound` (404), `ErrConflict` (409). Each maps, with no
   configuration, to an `about:blank` problem with a fixed detail; the wrap text never reaches the
   client. They are built-in mappers, so consumer code overrides them and `WithoutBuiltins` turns
   them off; a sentinel beats a `WithStatus` hint and a standard library error in the same chain.

@@ -39,7 +39,40 @@ import "errors"
 // mapper, or wrap it with the sentinel where the application decides that it
 // means "not found".
 var (
+	// ErrInvalidInput reports that the request is invalid: a malformed or
+	// missing parameter, or a value the operation does not accept. It becomes
+	// a 400 Bad Request problem. For field-level validation details, map the
+	// validation error to a problem that lists them instead.
+	ErrInvalidInput = errors.New("prblm: invalid input")
+
+	// ErrUnauthenticated reports that the request has no valid credentials:
+	// they are missing, expired or wrong. It becomes a 401 Unauthorized
+	// problem. For a caller who is known but not allowed, use
+	// [ErrPermissionDenied].
+	//
+	// RFC 9110 requires a WWW-Authenticate header on a 401, and the handler
+	// cannot know the authentication scheme, so the default problem has none.
+	// Add it with a consumer mapper, which replaces the default problem:
+	//
+	//	prblm.WithMappers(prblm.Is(prblm.ErrUnauthenticated, func(error) *prblm.Problem {
+	//		return prblm.New(http.StatusUnauthorized,
+	//			prblm.WithDetail("Authentication is required."),
+	//			prblm.WithHeader("WWW-Authenticate", `Bearer realm="api"`))
+	//	}))
+	ErrUnauthenticated = errors.New("prblm: unauthenticated")
+
+	// ErrPermissionDenied reports that the caller is known but not allowed to
+	// perform the action. It becomes a 403 Forbidden problem. A 403 confirms
+	// that the resource exists; when that is itself secret, return
+	// [ErrNotFound] instead.
+	ErrPermissionDenied = errors.New("prblm: permission denied")
+
 	// ErrNotFound reports that the requested resource does not exist. It
 	// becomes a 404 Not Found problem.
 	ErrNotFound = errors.New("prblm: not found")
+
+	// ErrConflict reports that the request conflicts with the current state
+	// of the resource: a duplicate, a state that forbids the operation, or a
+	// concurrent change. It becomes a 409 Conflict problem.
+	ErrConflict = errors.New("prblm: conflict")
 )

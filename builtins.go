@@ -50,7 +50,11 @@ type sentinel struct {
 // sentinels lists the sentinel errors with their problems, by ascending
 // status, so the lowest status wins for a chain that matches several.
 var sentinels = []sentinel{
+	{err: ErrInvalidInput, status: http.StatusBadRequest, detail: "The request is invalid."},
+	{err: ErrUnauthenticated, status: http.StatusUnauthorized, detail: "Authentication is required."},
+	{err: ErrPermissionDenied, status: http.StatusForbidden, detail: "You are not allowed to perform this action."},
 	{err: ErrNotFound, status: http.StatusNotFound, detail: "The requested resource was not found."},
+	{err: ErrConflict, status: http.StatusConflict, detail: "The request conflicts with the current state of the resource."},
 }
 
 // mapSentinel maps the first sentinel that err matches, as errors.Is reports

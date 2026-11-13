@@ -80,7 +80,11 @@ handler := h.Wrap(func(_ http.ResponseWriter, r *http.Request) error {
 
 | Sentinel | Status | Detail |
 |---|---|---|
+| `ErrInvalidInput` | 400 | `The request is invalid.` |
+| `ErrUnauthenticated` | 401 | `Authentication is required.` |
+| `ErrPermissionDenied` | 403 | `You are not allowed to perform this action.` |
 | `ErrNotFound` | 404 | `The requested resource was not found.` |
+| `ErrConflict` | 409 | `The request conflicts with the current state of the resource.` |
 
 Each problem is `about:blank` with the status phrase as title and the fixed detail. The wrap text,
 the error string and any wrapped cause never reach the client; the `OnError` hook receives the
@@ -94,6 +98,20 @@ error as returned.
 - When an error matches several sentinels, the lowest status wins; a sentinel wins over a standard
   library error, such as `context.DeadlineExceeded`, in the same chain.
 - `WithoutBuiltins()` turns the sentinels off with the other built-ins.
+- `ErrPermissionDenied` (403) confirms that the resource exists; when that is itself secret, return
+  `ErrNotFound`.
+- The default 401 has no `WWW-Authenticate` header, which RFC 9110 requires, because the library
+  cannot know your scheme. Add it with a consumer mapper. *(Mirrors `ExampleErrUnauthenticated`.)*
+
+```go
+h := prblm.NewHandler(prblm.WithMappers(
+	prblm.Is(prblm.ErrUnauthenticated, func(error) *prblm.Problem {
+		return prblm.New(http.StatusUnauthorized,
+			prblm.WithDetail("Authentication is required."),
+			prblm.WithHeader("WWW-Authenticate", `Bearer realm="api"`))
+	}),
+))
+```
 - The sentinels are your application's classification. A data layer's not-found error, such as
   `sql.ErrNoRows`, is not one of them: map it, or wrap it with the sentinel where you decide it
   means "not found".
