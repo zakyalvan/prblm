@@ -493,3 +493,67 @@ func TestComplete_FinalizeLast(t *testing.T) {
 		t.Errorf("members = %v, want the title Conflict", m)
 	}
 }
+
+// problem-types / Scenario: Undocumented sub-type.
+func TestResolve_Undocumented(t *testing.T) {
+	t.Parallel()
+
+	registered := prblm.WithTypes(prblm.DefineType("contracts/blacklisted-supplier", http.StatusConflict, "Supplier is blacklisted", ""))
+
+	tests := []struct {
+		name     string
+		config   []prblm.Option
+		given    string
+		rendered string
+		isNoted  bool
+	}{
+		{
+			name:     "unknown sub-type",
+			config:   []prblm.Option{registered},
+			given:    "contracts/unknown",
+			rendered: "/v1/api/probs/contracts/unknown",
+			isNoted:  true,
+		},
+		{
+			name:     "registered sub-type",
+			config:   []prblm.Option{registered},
+			given:    "contracts/blacklisted-supplier",
+			rendered: "/v1/api/probs/contracts/blacklisted-supplier",
+		},
+		{
+			name:     "discovery off",
+			config:   []prblm.Option{registered, prblm.WithoutDiscovery()},
+			given:    "contracts/unknown",
+			rendered: "/v1/api/probs/contracts/unknown",
+		},
+		{name: "no types", given: "contracts/unknown", rendered: "/v1/api/probs/contracts/unknown"},
+		{
+			name:     "absolute type",
+			config:   []prblm.Option{registered},
+			given:    "https://example.com/probs/x",
+			rendered: "https://example.com/probs/x",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			var r recorder
+
+			opts := append([]prblm.Option{prblm.WithNamespace("/v1/api/probs"), conflictOfType(tt.given), prblm.OnError(r.hook)}, tt.config...)
+			rec := answer(t, prblm.NewHandler(opts...), errContract)
+
+			if got := typeMember(t, rec); got != tt.rendered {
+				t.Errorf("type = %q, want %q", got, tt.rendered)
+			}
+
+			calls := r.recorded()
+			isNoted := len(calls) == 2 && errors.Is(calls[0].err, prblm.ErrUndocumentedType)
+
+			if isNoted != tt.isNoted || len(calls) != map[bool]int{true: 2, false: 1}[tt.isNoted] {
+				t.Errorf("hook calls = %+v, want an ErrUndocumentedType note: %v", calls, tt.isNoted)
+			}
+		})
+	}
+}

@@ -45,3 +45,8 @@ The first release, planned as v0.1.0.
   immutable `Type`, and `Type.New`, which builds problems of that type for mappers. `WithTypes`
   registers definitions with the handler; a duplicate sub-type or types without a namespace panic
   in `NewHandler`.
+- Discovery: with types registered, `Handler.Discovery` serves each type's documentation at its type
+  URL (HTML, or JSON when preferred) and an index at `Handler.DiscoveryPath`, pre-rendered, escaped,
+  sent with `nosniff` and a restrictive CSP, and cacheable with a strong `ETag`.
+  `WithoutDiscovery` turns it off. A sub-type without a definition gets a hook note wrapping
+  `ErrUndocumentedType`.

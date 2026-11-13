@@ -105,28 +105,28 @@ Every slice ends with:
   - RED: both JSON rows and both link rows, including the absolute-namespace `href`
   - GREEN: index pages rendered once, from definitions sorted by sub-type
   - REFACTOR: /simplify
-- [ ] 4.5 Answer unknown paths with 404 problems without calling the hook (type-discovery / Scenario: Unknown type); verify `go test -run TestDiscovery_Unknown` passes
+- [x] 4.5 Answer unknown paths with 404 problems without calling the hook (type-discovery / Scenario: Unknown type); verify `go test -run TestDiscovery_Unknown` passes
   - RED: every path row, including `%2e%2e` and `%00`, asserting the hook was called 0 times
   - GREEN: exact lookup after the prefix; reject when `EscapedPath` differs from `Path`; render the 404 without `report`
   - REFACTOR: /simplify
-- [ ] 4.6 Refuse other methods with 405 (type-discovery / Scenario: Wrong method); verify `go test -run TestDiscovery_Method` passes
-- [ ] 4.7 Escape hostile definition text and set the security headers (type-discovery / Scenario: Hostile definition text, Scenario: Security headers); verify `go test -run 'TestDiscovery_(Hostile|Headers)'` passes
+- [x] 4.6 Refuse other methods with 405 (type-discovery / Scenario: Wrong method); verify `go test -run TestDiscovery_Method` passes
+- [x] 4.7 Escape hostile definition text and set the security headers (type-discovery / Scenario: Hostile definition text, Scenario: Security headers); verify `go test -run 'TestDiscovery_(Hostile|Headers)'` passes
   - RED: every hostile row, and every header row for doc HTML, doc JSON and index HTML
   - GREEN: rely on `html/template` contextual escaping and `encoding/json` HTML escaping; set the headers in one place
   - REFACTOR: Extract Function for the header set, then /simplify
-- [ ] 4.8 Make documentation cacheable by browsers (type-discovery / Scenario: Caching headers, Scenario: Conditional requests, Scenario: ETag changes with the definition); verify `go test -race -run 'TestDiscovery_(Caching|Conditional|ETag)'` passes
+- [x] 4.8 Make documentation cacheable by browsers (type-discovery / Scenario: Caching headers, Scenario: Conditional requests, Scenario: ETag changes with the definition); verify `go test -race -run 'TestDiscovery_(Caching|Conditional|ETag)'` passes
   - RED: every cacheable and not-cacheable row; every revalidated and full-response `If-None-Match` row, including weak, `*`, list and malformed values; the two ETag-relation rows
   - GREEN: `Cache-Control` and a SHA-256-based strong `ETag` computed with each pre-rendered page; an `If-None-Match` matcher using weak comparison; 304 without a body
   - REFACTOR: look for Data Clumps (body, content type, ETag), then Introduce Parameter Object `page`, then /simplify
-- [ ] 4.9 Serve the namespace path for absolute namespaces (type-discovery / Scenario: Absolute namespace); verify `go test -run TestDiscovery_AbsoluteNamespace` passes
-- [ ] 4.10 Mount discovery on an `http.ServeMux` next to other routes (type-discovery / Scenario: net/http mount); verify `go test -run TestDiscovery_Mount` passes
-- [ ] 4.11 Stay correct under concurrency (type-discovery / Scenario: Concurrent documentation requests); verify `go test -race -run TestDiscovery_Concurrent` passes with 300 requests
-- [ ] 4.12 Note undocumented sub-types (problem-types / Scenario: Undocumented sub-type); verify `go test -run TestResolve_Undocumented` passes
+- [x] 4.9 Serve the namespace path for absolute namespaces (type-discovery / Scenario: Absolute namespace); verify `go test -run TestDiscovery_AbsoluteNamespace` passes
+- [x] 4.10 Mount discovery on an `http.ServeMux` next to other routes (type-discovery / Scenario: net/http mount); verify `go test -run TestDiscovery_Mount` passes
+- [x] 4.11 Stay correct under concurrency (type-discovery / Scenario: Concurrent documentation requests); verify `go test -race -run TestDiscovery_Concurrent` passes with 300 requests
+- [x] 4.12 Note undocumented sub-types (problem-types / Scenario: Undocumented sub-type); verify `go test -run TestResolve_Undocumented` passes
   - RED: the five rows; fails because `ErrUndocumentedType` doesn't exist
   - GREEN: exported `ErrUndocumentedType`; the check in `resolveType` when discovery is on
   - REFACTOR: reuse the note helper from 2.6, then /simplify
-- [ ] 4.13 Document discovery (godoc, `ExampleHandler_Discovery` mounting on a `ServeMux`, README "Discovering problem types", including the absolute-namespace routing note and why types are never built from `Host`); verify `go test -run Example` passes
-- [ ] 4.14 Verify slice 4 end to end over `httptest.Server`. Check `go tool cover -func` covers every branch of the discovery handler, the negotiator and the page rendering, and run diagnostics, vet, lint, `-race` and `GOWORK=off`.
+- [x] 4.13 Document discovery (godoc, `ExampleHandler_Discovery` mounting on a `ServeMux`, README "Discovering problem types", including the absolute-namespace routing note and why types are never built from `Host`); verify `go test -run Example` passes
+- [x] 4.14 Verify slice 4 end to end over `httptest.Server`. Check `go tool cover -func` covers every branch of the discovery handler, the negotiator and the page rendering, and run diagnostics, vet, lint, `-race` and `GOWORK=off`.
 
 ## 5. Slice: the gin middleware serves discovery for unclaimed paths
 

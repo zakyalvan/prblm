@@ -45,8 +45,9 @@ func WithEnrichers(enrichers ...func(ctx context.Context, p *Problem)) Option {
 // (with a nil problem), an error wrapping [ErrInvalidStatus] for a status
 // outside 400–599 that was replaced, an error wrapping [ErrInvalidType] for a
 // relative type that is not a valid sub-type and was replaced by
-// about:blank, or an error wrapping [ErrEncoding] for a problem that could
-// not be encoded. Use errors.Is and errors.As to tell
+// about:blank, an error wrapping [ErrUndocumentedType] for a sub-type
+// without a registered definition while discovery is on, or an error
+// wrapping [ErrEncoding] for a problem that could not be encoded. Use errors.Is and errors.As to tell
 // notes from the error being answered. The encoding note carries the problem
 // that failed to encode; the call that follows it carries the minimal 500
 // problem that was sent instead. A hook that panics is ignored.

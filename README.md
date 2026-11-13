@@ -165,6 +165,53 @@ h = prblm.NewHandler(prblm.WithNamespace("https://kartala.id/probs"), blackliste
   for example across staging and production.
 - **Without a namespace**, types are written exactly as given.
 
+## Discovering problem types
+
+RFC 9457 recommends that a problem's type URL lead to documentation people can read. Define each
+type once with `DefineType`, register the definitions with `WithTypes`, and the handler serves their
+documentation. *(Mirrors `ExampleDefineType` and `ExampleHandler_Discovery`.)*
+
+```go
+var OutOfCredit = prblm.DefineType("out-of-credit", http.StatusForbidden, "Out of credit",
+	"The account balance is below the price of the request.")
+
+h := prblm.NewHandler(
+	prblm.WithNamespace("/v1/api/probs"),
+	prblm.WithTypes(OutOfCredit),
+	prblm.WithMappers(prblm.Is(ErrOutOfCredit, func(error) *prblm.Problem {
+		return OutOfCredit.New() // type, status and title come from the definition
+	})),
+)
+
+mux := http.NewServeMux()
+if path := h.DiscoveryPath(); path != "" {
+	mux.Handle("GET "+path+"/", h.Discovery())
+}
+```
+
+- **What is served:**
+  - each type's documentation at its type URL, such as `/v1/api/probs/out-of-credit`;
+  - an index of all types, sorted by sub-type, at the namespace path;
+  - a 404 problem for any other path under it (the hook is not called, since no application
+    error happened);
+  - a 405 problem with `Allow: GET, HEAD` for any other method.
+- **Format:** a complete HTML page by default, or JSON (`type`, `subtype`, `status`, `title`,
+  `description`) for a client that prefers `application/json`.
+- **Safety:** the pages show only the text written into `DefineType`, never anything from errors
+  or requests. HTML is escaped by `html/template` and sent with `X-Content-Type-Options: nosniff`
+  and `Content-Security-Policy: default-src 'none'; style-src 'unsafe-inline'`.
+- **Caching:** the pages are rendered once, in `NewHandler`, and are cacheable by browsers
+  (`Cache-Control: public, max-age=3600` and a strong `ETag`; a matching `If-None-Match` gets
+  304). Definitions only change with a redeploy, so a stale page lasts at most an hour.
+- **Undocumented types:** with discovery on, a problem whose sub-type has no definition is still
+  sent, and the `OnError` hook receives a note wrapping `ErrUndocumentedType`, because its type URL
+  leads to a 404.
+- **Opting out:** `WithoutDiscovery()` keeps the definitions but serves nothing.
+- **An absolute namespace** (`https://kartala.id/probs`) is served at its path (`/probs`): routing
+  that host to the application is up to the operator. Types are never built from the request's
+  `Host` header, because a client controls it; a path namespace gives a path-only type that the
+  client resolves against the URL it requested.
+
 ## Logging
 
 The library never logs. The `OnError` hook receives every answered error with the problem being
@@ -180,8 +227,9 @@ h := prblm.NewHandler(prblm.OnError(func(_ context.Context, err error, p *prblm.
 Before that call, the hook may also receive notes about mistakes the handler worked around: a
 `*PanicError` from consumer code that panicked, an error wrapping `ErrInvalidStatus` for a mapper
 status outside 400–599, an error wrapping `ErrInvalidType` for a relative type that is not a valid
-sub-type (see [Problem types](#problem-types)), or an error wrapping `ErrEncoding` for a problem
-that could not be encoded. Tell them apart from the error being answered with `errors.Is` and `errors.As`.
+sub-type (see [Problem types](#problem-types)), an error wrapping `ErrUndocumentedType` for a
+sub-type without a registered definition (see [Discovering problem types](#discovering-problem-types)),
+or an error wrapping `ErrEncoding` for a problem that could not be encoded. Tell them apart from the error being answered with `errors.Is` and `errors.As`.
 Mappers, enrichers and the hook may panic without breaking the response.
 
 ## Panic recovery
@@ -374,6 +422,9 @@ themselves differ:
 | Type namespace | none: types written as given | no change for code that writes full type URIs | `WithNamespace` |
 | Invalid relative type (with a namespace) | `about:blank`, and a note to the hook | a broken link is worse than none | — |
 | Types from the request host | never | the `Host` header is client-controlled | — |
+| Type documentation | served when types are registered, off otherwise | registering types is the intent to document them | `WithTypes`, `WithoutDiscovery()` |
+| Documentation format | HTML, JSON when the client prefers it | RFC 9457 asks for docs people can read | `Accept: application/json` |
+| Documentation caching | `public, max-age=3600` with a strong `ETag` | definitions change only with a redeploy | — |
 | `instance` | the request path, without the query string | identify the occurrence without leaking query tokens | an enricher, or set per problem |
 | Format | JSON, XML when the client prefers it | most clients read JSON | — |
 | `Cache-Control` | `no-store`, unless the handler or the problem sets one | caches must not replay an error | set the header |

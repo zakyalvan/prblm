@@ -2,12 +2,14 @@ package prblm
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"html/template"
+	"maps"
 	"net/http"
 	"net/url"
-	"strconv"
 	"strings"
 
 	"github.com/kartaladev/prblm/internal/negotiate"
@@ -25,51 +27,46 @@ const (
 // documentation people can read.
 var docOffers = []string{mediaTypeHTML, mediaTypeDocJSON}
 
-// docTemplate renders the HTML documentation of one type: a complete page
+// pageShell is the layout every documentation page shares: a complete page
 // with inline styles only, so the Content-Security-Policy needs no
-// exception beyond inline styles. html/template escapes every value.
-var docTemplate = template.Must(template.New("doc").Parse(`<!DOCTYPE html>
+// exception beyond inline styles. A page defines its "title" and "content";
+// html/template escapes every value.
+var pageShell = template.Must(template.New("page").Parse(`<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{{.Title}}</title>
+<title>{{template "title" .}}</title>
 <style>` + pageStyle + `</style>
 </head>
 <body>
 <main>
-<h1>{{.Title}}</h1>
-<dl>
-<dt>Status</dt><dd>{{.Status}}</dd>
-<dt>Type</dt><dd><code>{{.Type}}</code></dd>
-<dt>Sub-type</dt><dd><code>{{.Subtype}}</code></dd>
-</dl>
-{{with .Description}}<p class="description">{{.}}</p>{{end}}
+<h1>{{template "title" .}}</h1>
+{{template "content" .}}
 </main>
 </body>
 </html>
 `))
 
+// docTemplate renders the HTML documentation of one type.
+var docTemplate = pageTemplate(`{{define "title"}}{{.Title}}{{end}}{{define "content"}}<dl>
+<dt>Status</dt><dd>{{.Status}}</dd>
+<dt>Type</dt><dd><code>{{.Type}}</code></dd>
+<dt>Sub-type</dt><dd><code>{{.Subtype}}</code></dd>
+</dl>
+{{with .Description}}<p class="description">{{.}}</p>{{end}}{{end}}`)
+
 // indexTemplate renders the HTML index of the registered types, each
 // linking to its documentation at its type URL.
-var indexTemplate = template.Must(template.New("index").Parse(`<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Problem types</title>
-<style>` + pageStyle + `</style>
-</head>
-<body>
-<main>
-<h1>Problem types</h1>
-<ul>
+var indexTemplate = pageTemplate(`{{define "title"}}Problem types{{end}}{{define "content"}}<ul>
 {{range .Types}}<li><a href="{{.Type}}">{{.Title}}</a> <code>{{.Subtype}}</code> ({{.Status}})</li>
-{{end}}</ul>
-</main>
-</body>
-</html>
-`))
+{{end}}</ul>{{end}}`)
+
+// pageTemplate returns the page shell with the title and content blocks
+// defined by blocks.
+func pageTemplate(blocks string) *template.Template {
+	return template.Must(template.Must(pageShell.Clone()).Parse(blocks))
+}
 
 // pageStyle is the inline CSS of the documentation pages.
 const pageStyle = "body{font-family:system-ui,sans-serif;line-height:1.5;margin:0;padding:2rem;color:#1f2328;background:#fff}" +
@@ -101,27 +98,95 @@ type discovery struct {
 	path string
 }
 
-// page is one rendered documentation response. Its header is built once
-// and only read; writing a page copies it.
+// pageCacheControl lets browsers and shared caches keep a page for an hour.
+// Definitions change only when the application is redeployed, so an hour
+// bounds how long a stale page is shown, and the ETag makes revalidation
+// after that a cheap 304.
+const pageCacheControl = "public, max-age=3600"
+
+// page is one rendered documentation resource: its full response and the
+// 304 that revalidates it, both built once and only read, since writing a
+// response copies its header.
 type page struct {
-	header http.Header
-	body   []byte
+	full        Response
+	notModified Response
+	etag        string
 }
 
-// newPage returns the page of body, sent with contentType.
-func newPage(contentType string, body []byte) page {
+// newPage returns the page of body, sent with contentType. Every page is
+// sent with nosniff, so a browser never reads it as another type, varies on
+// Accept, because HTML and JSON share the URL, and is cacheable with a
+// strong ETag of its own: the first 16 hex digits of the SHA-256 of body,
+// so it changes exactly when the rendered page does.
+func newPage(contentType string, body []byte, extra http.Header) page {
+	sum := sha256.Sum256(body)
+	etag := `"` + hex.EncodeToString(sum[:8]) + `"`
+
+	header := http.Header{
+		"X-Content-Type-Options": {"nosniff"},
+		"Cache-Control":          {pageCacheControl},
+		"Etag":                   {etag},
+	}
+	maps.Copy(header, extra)
+
 	return page{
-		header: http.Header{
-			"Content-Type":   {contentType},
-			"Content-Length": {strconv.Itoa(len(body))},
-		},
-		body: body,
+		// newResponse adds Content-Type, Content-Length and Vary: Accept,
+		// and keeps the page's own Cache-Control.
+		full: newResponse(http.StatusOK, header, contentType, body),
+		notModified: Response{Status: http.StatusNotModified, Header: http.Header{
+			"Etag":          {etag},
+			"Cache-Control": {pageCacheControl},
+			"Vary":          {"Accept"},
+		}},
+		etag: etag,
 	}
 }
 
-// response returns p as a 200 response.
-func (p page) response() Response {
-	return Response{Status: http.StatusOK, Header: p.header, Body: p.body}
+// response returns p as the answer to a request with the If-None-Match
+// header ifNoneMatch: 304 without a body when it matches the page's ETag,
+// and the page otherwise.
+func (p page) response(ifNoneMatch string) Response {
+	if matchesETag(ifNoneMatch, p.etag) {
+		return p.notModified
+	}
+
+	return p.full
+}
+
+// matchesETag reports whether the If-None-Match header ifNoneMatch matches
+// the strong entity tag etag: it is "*" or lists etag, compared weakly as
+// RFC 9110 (section 13.1.2) requires, so W/"x" matches "x". The list is
+// scanned tag by tag, since a quoted tag may itself contain a comma; at the
+// first malformed element the scan stops, so garbage matches nothing.
+func matchesETag(ifNoneMatch, etag string) bool {
+	rest := ifNoneMatch
+
+	for {
+		rest = strings.TrimLeft(rest, " \t,")
+		if rest == "" {
+			return false
+		}
+
+		if rest[0] == '*' {
+			return true
+		}
+
+		rest = strings.TrimPrefix(rest, "W/")
+		if rest == "" || rest[0] != '"' {
+			return false
+		}
+
+		end := strings.IndexByte(rest[1:], '"')
+		if end < 0 {
+			return false
+		}
+
+		if tag := rest[:end+2]; tag == etag {
+			return true
+		}
+
+		rest = rest[end+2:]
+	}
 }
 
 // pages are the representations of one documentation resource.
@@ -164,10 +229,17 @@ type typeDoc struct {
 	Description string `json:"description"`
 }
 
-// lookup returns the pages served at path: the index at the namespace path,
+// lookup returns the pages served at u: the index at the namespace path,
 // with or without a trailing slash, or the documentation of the type whose
-// sub-type is the rest of the path, matched exactly.
-func (d *discovery) lookup(path string) (pages, bool) {
+// sub-type is the rest of the path, matched exactly. A path with encoded
+// characters ("%2F", "%2D") matches nothing, so every page has exactly one
+// URL; the exact match also leaves no room for "..".
+func (d *discovery) lookup(u *url.URL) (pages, bool) {
+	path := u.Path
+	if u.EscapedPath() != path {
+		return pages{}, false
+	}
+
 	if path == d.path || path == d.path+"/" {
 		return d.index, true
 	}
@@ -182,51 +254,60 @@ func (d *discovery) lookup(path string) (pages, bool) {
 	return doc, ok
 }
 
-// namespacePath returns the path of a checked namespace: the namespace
-// itself when it is a path, or the path of the URI.
-func namespacePath(ns string) string {
-	u, err := url.Parse(ns)
-	if err != nil {
-		// A checked namespace always parses.
-		panic(fmt.Sprintf("prblm: namespace %q does not parse: %v", ns, err))
-	}
+// documents reports whether d serves documentation for subtype.
+func (d *discovery) documents(subtype string) bool {
+	_, ok := d.docs[subtype]
 
-	return u.Path
+	return ok
 }
 
-// jsonPage renders v as a JSON page. The values come from type definitions,
-// whose fields are strings and numbers, so encoding cannot fail.
-func jsonPage(v any) page {
+// namespacePath returns the path of a checked namespace: the namespace
+// itself when it is a path, or the path of the URI. A checked URI has a
+// host, a path, no user info, query or fragment, and nothing escaped, so
+// its path is everything from the first "/" after the host.
+func namespacePath(ns string) string {
+	if _, rest, ok := strings.Cut(ns, "://"); ok {
+		return rest[strings.IndexByte(rest, '/'):]
+	}
+
+	return ns
+}
+
+// jsonPage renders v, the documentation of the resource name, as a JSON
+// page. The values come from type definitions, whose fields are strings
+// and numbers, so encoding cannot fail; should it, the handler cannot be
+// created, and the panic names the resource.
+func jsonPage(name string, v any) page {
 	body, err := json.Marshal(v)
 	if err != nil {
-		panic(fmt.Sprintf("prblm: rendering documentation: %v", err))
+		panic(fmt.Sprintf("prblm: rendering the documentation of %q: %v", name, err))
 	}
 
-	return newPage(mediaTypeDocJSON, body)
+	return newPage(mediaTypeDocJSON, body, nil)
 }
 
-// htmlPage renders data with tmpl as an HTML page. The templates are fixed
-// and the data are strings and numbers, so rendering cannot fail.
-func htmlPage(tmpl *template.Template, data any) page {
+// htmlPage renders data, the documentation of the resource name, with tmpl
+// as an HTML page. The templates are fixed and the data are strings and
+// numbers, so rendering cannot fail; should it, the handler cannot be
+// created, and the panic names the resource.
+func htmlPage(name string, tmpl *template.Template, data any) page {
 	var buf bytes.Buffer
 	if err := tmpl.Execute(&buf, data); err != nil {
-		panic(fmt.Sprintf("prblm: rendering documentation: %v", err))
+		panic(fmt.Sprintf("prblm: rendering the documentation of %q: %v", name, err))
 	}
 
-	return newPage(mediaTypeHTML+"; charset=utf-8", buf.Bytes())
+	// The page loads nothing and runs nothing; only its inline styles apply.
+	return newPage(mediaTypeHTML+"; charset=utf-8", buf.Bytes(), http.Header{
+		"Content-Security-Policy": {"default-src 'none'; style-src 'unsafe-inline'"},
+	})
 }
 
-// writeDiscovery writes res as the answer to r: its headers merged into
-// those already set, its status, and its body unless r is a HEAD request,
-// which gets the same headers and no body.
+// writeDiscovery writes res as the answer to r. A HEAD request gets the
+// same headers and no body, whatever writer serves it.
 func writeDiscovery(w http.ResponseWriter, r *http.Request, res Response) {
-	res.MergeInto(w.Header())
-	w.WriteHeader(res.Status)
-
 	if r.Method == http.MethodHead {
-		return
+		res.Body = nil
 	}
 
-	// A failed write means the client is gone; there is nobody left to tell.
-	_, _ = w.Write(res.Body)
+	track(w).send(res)
 }

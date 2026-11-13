@@ -1,10 +1,12 @@
 package prblm_test
 
 import (
+	"io"
 	"maps"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/kartaladev/prblm"
@@ -87,7 +89,7 @@ func TestDiscovery_State(t *testing.T) {
 				t.Errorf("status = %d, want %d", rec.Code, tt.status)
 			}
 
-			if tt.status == http.StatusNotFound && rec.Header().Get("Content-Type") != "application/problem+json" {
+			if tt.status == http.StatusNotFound && rec.Header().Get("Content-Type") != problemJSONType {
 				t.Errorf("Content-Type = %q, want a problem", rec.Header().Get("Content-Type"))
 			}
 		})
@@ -187,7 +189,7 @@ func TestDiscovery_Head(t *testing.T) {
 		status      int
 	}{
 		{path: "/v1/api/probs/contracts/blacklisted-supplier", status: http.StatusOK, contentType: htmlType},
-		{path: "/v1/api/probs/contracts/unknown", status: http.StatusNotFound, contentType: "application/problem+json"},
+		{path: "/v1/api/probs/contracts/unknown", status: http.StatusNotFound, contentType: problemJSONType},
 	}
 
 	for _, tt := range tests {
@@ -266,6 +268,480 @@ func TestDiscovery_IndexLinks(t *testing.T) {
 
 			if want := `href="` + tt.href + `"`; rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), want) {
 				t.Errorf("response %d without %s:\n%s", rec.Code, want, rec.Body.String())
+			}
+		})
+	}
+}
+
+// type-discovery / Scenario: Unknown type.
+func TestDiscovery_Unknown(t *testing.T) {
+	t.Parallel()
+
+	paths := []string{
+		"/v1/api/probs/contracts/unknown",
+		"/v1/api/probs/contracts/blacklisted-supplier/",
+		"/v1/api/probs/contracts/blacklisted-supplier/extra",
+		"/v1/api/probs/Contracts/Blacklisted-Supplier",
+		"/v1/api/probs/contracts",
+		"/v1/api/probs/contracts/%2e%2e/out-of-credit",
+		"/v1/api/probs/contracts/blacklisted-supplier%00",
+		// Design D4 Murphy rows: encodings of a registered sub-type are not
+		// its URL, so every document has exactly one.
+		"/v1/api/probs/contracts%2Fblacklisted-supplier",
+		"/v1/api/probs/out%2Dof%2Dcredit",
+	}
+
+	for _, path := range paths {
+		t.Run(path, func(t *testing.T) {
+			t.Parallel()
+
+			var r recorder
+
+			rec := discover(t, documented(prblm.OnError(r.hook)), http.MethodGet, path, nil)
+			m := decodeMembers(t, rec.Body.Bytes())
+
+			if rec.Code != http.StatusNotFound || rec.Header().Get("Content-Type") != problemJSONType || m["title"] != "Not Found" {
+				t.Errorf("response %d %q %v, want a 404 problem titled Not Found", rec.Code, rec.Header().Get("Content-Type"), m)
+			}
+
+			if calls := r.recorded(); len(calls) != 0 {
+				t.Errorf("hook calls = %+v, want none", calls)
+			}
+		})
+	}
+}
+
+// type-discovery / Scenario: Wrong method.
+func TestDiscovery_Method(t *testing.T) {
+	t.Parallel()
+
+	h := documented()
+
+	for _, method := range []string{http.MethodPost, http.MethodPut, http.MethodDelete, http.MethodOptions} {
+		t.Run(method, func(t *testing.T) {
+			t.Parallel()
+
+			rec := discover(t, h, method, "/v1/api/probs/contracts/blacklisted-supplier", nil)
+
+			if rec.Code != http.StatusMethodNotAllowed || rec.Header().Get("Allow") != "GET, HEAD" ||
+				rec.Header().Get("Content-Type") != problemJSONType {
+				t.Errorf("response %d Allow %q %q, want a 405 problem with Allow: GET, HEAD",
+					rec.Code, rec.Header().Get("Allow"), rec.Header().Get("Content-Type"))
+			}
+		})
+	}
+}
+
+// type-discovery / Scenario: Hostile definition text.
+func TestDiscovery_Hostile(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name        string
+		title       string
+		description string
+		accept      string
+		contains    string
+		absent      string
+	}{
+		{
+			name:        "script in the description",
+			title:       "Locked",
+			description: "<script>alert(1)</script>",
+			accept:      "text/html",
+			contains:    "&lt;script&gt;alert(1)&lt;/script&gt;",
+			absent:      "<script>",
+		},
+		{
+			name:        "markup in the title",
+			title:       "<img src=x onerror=alert(1)>",
+			description: "x",
+			accept:      "text/html",
+			contains:    "&lt;img src=x onerror=alert(1)&gt;",
+			absent:      "<img",
+		},
+		{
+			name:        "quotes and markup in json",
+			title:       "Locked",
+			description: `"quoted" & <tagged>`,
+			accept:      jsonType,
+			contains:    `"\"quoted\" \u0026 \u003ctagged\u003e"`,
+			absent:      "<tagged>",
+		},
+		{
+			name:        "line breaks",
+			title:       "Locked",
+			description: "line one\nline two",
+			accept:      "text/html",
+			contains:    "line one",
+			absent:      "<script>",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			hostile := prblm.DefineType("contracts/locked", http.StatusConflict, tt.title, tt.description)
+			h := prblm.NewHandler(prblm.WithNamespace("/v1/api/probs"), prblm.WithTypes(hostile))
+
+			rec := discover(t, h, http.MethodGet, "/v1/api/probs/contracts/locked", accept(tt.accept))
+			body := rec.Body.String()
+
+			if !strings.Contains(body, tt.contains) || strings.Contains(body, tt.absent) {
+				t.Errorf("body should contain %q and not %q:\n%s", tt.contains, tt.absent, body)
+			}
+
+			if tt.accept == jsonType {
+				if got := decodeMembers(t, rec.Body.Bytes())["description"]; got != tt.description {
+					t.Errorf("decoded description = %q, want %q", got, tt.description)
+				}
+			}
+		})
+	}
+}
+
+// type-discovery / Scenario: Security headers.
+func TestDiscovery_Headers(t *testing.T) {
+	t.Parallel()
+
+	const csp = "default-src 'none'; style-src 'unsafe-inline'"
+
+	h := documented()
+
+	tests := []struct {
+		name   string
+		path   string
+		accept string
+		csp    string
+	}{
+		{name: "html", path: "/v1/api/probs/out-of-credit", accept: "text/html", csp: csp},
+		{name: "json", path: "/v1/api/probs/out-of-credit", accept: jsonType},
+		{name: "index html", path: "/v1/api/probs", accept: "text/html", csp: csp},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			header := discover(t, h, http.MethodGet, tt.path, accept(tt.accept)).Header()
+
+			if header.Get("X-Content-Type-Options") != "nosniff" || header.Get("Vary") != "Accept" ||
+				header.Get("Content-Security-Policy") != tt.csp {
+				t.Errorf("headers %v, want nosniff, Vary: Accept and CSP %q", header, tt.csp)
+			}
+		})
+	}
+}
+
+const cacheControl = "public, max-age=3600"
+
+// creditHandler returns a handler with namespace /v1/api/probs and only the
+// type out-of-credit registered, with description.
+func creditHandler(description string) *prblm.Handler {
+	credit := prblm.DefineType("out-of-credit", http.StatusForbidden, "Out of credit", description)
+
+	return prblm.NewHandler(prblm.WithNamespace("/v1/api/probs"), prblm.WithTypes(credit))
+}
+
+// isQuoted reports whether tag is a quoted strong entity tag.
+func isQuoted(tag string) bool {
+	return len(tag) > 2 && strings.HasPrefix(tag, `"`) && strings.HasSuffix(tag, `"`)
+}
+
+// type-discovery / Scenario: Caching headers.
+func TestDiscovery_Caching(t *testing.T) {
+	t.Parallel()
+
+	h := creditHandler("Balance too low.")
+	get := func(path, acceptValue string) *httptest.ResponseRecorder {
+		return discover(t, h, http.MethodGet, path, accept(acceptValue))
+	}
+
+	htmlTag := get("/v1/api/probs/out-of-credit", "text/html").Header().Get("ETag")
+
+	tests := []struct {
+		name   string
+		path   string
+		accept string
+		status int
+		// cacheable responses have the public Cache-Control and a quoted
+		// ETag; the others neither.
+		cacheable bool
+	}{
+		{name: "html", path: "/v1/api/probs/out-of-credit", accept: "text/html", status: http.StatusOK, cacheable: true},
+		{name: "json", path: "/v1/api/probs/out-of-credit", accept: jsonType, status: http.StatusOK, cacheable: true},
+		{name: "index", path: "/v1/api/probs", accept: "text/html", status: http.StatusOK, cacheable: true},
+		{name: "unknown", path: "/v1/api/probs/unknown", accept: "text/html", status: http.StatusNotFound},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			rec := get(tt.path, tt.accept)
+			cc, tag := rec.Header().Get("Cache-Control"), rec.Header().Get("ETag")
+
+			switch {
+			case rec.Code != tt.status:
+				t.Errorf("status = %d, want %d", rec.Code, tt.status)
+			case tt.cacheable && (cc != cacheControl || !isQuoted(tag)):
+				t.Errorf("Cache-Control %q, ETag %q; want %q and a quoted ETag", cc, tag, cacheControl)
+			case !tt.cacheable && (cc != "no-store" || tag != ""):
+				t.Errorf("Cache-Control %q, ETag %q; want the problem default no-store and no ETag", cc, tag)
+			case tt.accept == jsonType && tag == htmlTag:
+				t.Errorf("JSON ETag %q equals the HTML one", tag)
+			}
+		})
+	}
+}
+
+// type-discovery / Scenario: Conditional requests.
+func TestDiscovery_Conditional(t *testing.T) {
+	t.Parallel()
+
+	h := creditHandler("Balance too low.")
+
+	const path = "/v1/api/probs/out-of-credit"
+
+	full := discover(t, h, http.MethodGet, path, accept("text/html"))
+	e := full.Header().Get("ETag")
+	jsonTag := discover(t, h, http.MethodGet, path, accept(jsonType)).Header().Get("ETag")
+
+	tests := []struct {
+		name        string
+		method      string
+		accept      string
+		ifNoneMatch string
+		status      int
+		etag        string
+		body        string
+	}{
+		{name: "get matches", method: http.MethodGet, accept: "text/html", ifNoneMatch: e, status: http.StatusNotModified, etag: e},
+		{name: "head matches", method: http.MethodHead, accept: "text/html", ifNoneMatch: e, status: http.StatusNotModified, etag: e},
+		{name: "list", method: http.MethodGet, accept: "text/html", ifNoneMatch: `"other", ` + e, status: http.StatusNotModified, etag: e},
+		{name: "weak", method: http.MethodGet, accept: "text/html", ifNoneMatch: "W/" + e, status: http.StatusNotModified, etag: e},
+		{name: "any", method: http.MethodGet, accept: "text/html", ifNoneMatch: "*", status: http.StatusNotModified, etag: e},
+		{name: "other", method: http.MethodGet, accept: "text/html", ifNoneMatch: `"other"`, status: http.StatusOK, etag: e, body: full.Body.String()},
+		{name: "json with the html tag", method: http.MethodGet, accept: jsonType, ifNoneMatch: e, status: http.StatusOK, etag: jsonTag},
+		{name: "malformed", method: http.MethodGet, accept: "text/html", ifNoneMatch: ";;;garbage", status: http.StatusOK, etag: e, body: full.Body.String()},
+		{name: "empty", method: http.MethodGet, accept: "text/html", status: http.StatusOK, etag: e, body: full.Body.String()},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			header := accept(tt.accept)
+			if tt.ifNoneMatch != "" {
+				header.Set("If-None-Match", tt.ifNoneMatch)
+			}
+
+			rec := discover(t, h, tt.method, path, header)
+
+			if rec.Code != tt.status || rec.Header().Get("ETag") != tt.etag {
+				t.Errorf("response %d ETag %q, want %d %q", rec.Code, rec.Header().Get("ETag"), tt.status, tt.etag)
+			}
+
+			if tt.status == http.StatusNotModified && (rec.Body.Len() != 0 || rec.Header().Get("Cache-Control") != cacheControl) {
+				t.Errorf("304 with %d body bytes and Cache-Control %q, want no body and %q",
+					rec.Body.Len(), rec.Header().Get("Cache-Control"), cacheControl)
+			}
+
+			if tt.body != "" && rec.Body.String() != tt.body {
+				t.Errorf("body differs from the full page")
+			}
+
+			if tt.accept == jsonType && rec.Header().Get("Content-Type") != jsonType {
+				t.Errorf("Content-Type = %q, want the JSON document", rec.Header().Get("Content-Type"))
+			}
+		})
+	}
+}
+
+// type-discovery / Scenario: ETag changes with the definition.
+func TestDiscovery_ETag(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		first, second string
+		isEqual       bool
+	}{
+		{first: "Balance too low.", second: "Balance too low.", isEqual: true},
+		{first: "Balance too low.", second: "Balance is below the price."},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.second, func(t *testing.T) {
+			t.Parallel()
+
+			etag := func(description string) string {
+				return discover(t, creditHandler(description), http.MethodGet, "/v1/api/probs/out-of-credit", accept("text/html")).Header().Get("ETag")
+			}
+
+			if first, second := etag(tt.first), etag(tt.second); (first == second) != tt.isEqual || first == "" {
+				t.Errorf("ETags %q and %q, want equal: %v", first, second, tt.isEqual)
+			}
+		})
+	}
+}
+
+// type-discovery / Scenario: Absolute namespace.
+func TestDiscovery_AbsoluteNamespace(t *testing.T) {
+	t.Parallel()
+
+	h := prblm.NewHandler(prblm.WithNamespace("https://kartala.id/probs"), prblm.WithTypes(outOfCredit))
+
+	tests := []struct {
+		path   string
+		status int
+		typ    string
+	}{
+		{path: "/probs/out-of-credit", status: http.StatusOK, typ: "https://kartala.id/probs/out-of-credit"},
+		{path: "/v1/api/probs/out-of-credit", status: http.StatusNotFound},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.path, func(t *testing.T) {
+			t.Parallel()
+
+			rec := discover(t, h, http.MethodGet, tt.path, accept(jsonType))
+			if typ := typeMember(t, rec); rec.Code != tt.status || typ != tt.typ {
+				t.Errorf("response %d with type %q, want %d %q", rec.Code, typ, tt.status, tt.typ)
+			}
+		})
+	}
+}
+
+// type-discovery / Scenario: net/http mount.
+func TestDiscovery_Mount(t *testing.T) {
+	t.Parallel()
+
+	h := documented()
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /v1/contracts/{id}", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("contract"))
+	})
+	mux.Handle("GET "+h.DiscoveryPath()+"/", h.Discovery())
+
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	tests := []struct {
+		path string
+		body string
+	}{
+		{path: "/v1/api/probs/out-of-credit"},
+		{path: "/v1/api/probs/"},
+		{path: "/v1/contracts/7", body: "contract"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.path, func(t *testing.T) {
+			t.Parallel()
+
+			status, body := fetchURL(t, srv.Client(), srv.URL+tt.path, "")
+
+			if status != http.StatusOK || (tt.body != "" && body != tt.body) {
+				t.Errorf("response %d %q, want 200 %q", status, body, tt.body)
+			}
+		})
+	}
+}
+
+// fetchURL sends GET url with Accept set to acceptValue, when not empty,
+// and returns the status and body. It reports errors with t.Errorf only, so
+// goroutines may call it.
+func fetchURL(t *testing.T, client *http.Client, url, acceptValue string) (int, string) {
+	t.Helper()
+
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, url, http.NoBody)
+	if err != nil {
+		t.Errorf("new request: %v", err)
+
+		return 0, ""
+	}
+
+	if acceptValue != "" {
+		req.Header.Set("Accept", acceptValue)
+	}
+
+	res, err := client.Do(req)
+	if err != nil {
+		t.Errorf("GET %s: %v", url, err)
+
+		return 0, ""
+	}
+
+	defer func() { _ = res.Body.Close() }()
+
+	body, err := io.ReadAll(res.Body)
+	if err != nil {
+		t.Errorf("reading %s: %v", url, err)
+	}
+
+	return res.StatusCode, string(body)
+}
+
+// type-discovery / Scenario: Concurrent documentation requests.
+func TestDiscovery_Concurrent(t *testing.T) {
+	t.Parallel()
+
+	const requests = 300
+
+	h := documented()
+	srv := httptest.NewServer(h.Discovery())
+	t.Cleanup(srv.Close)
+
+	// Each request is one of the paths with one of the representations; the
+	// expected body is its single-request answer.
+	paths := []string{"/v1/api/probs/contracts/blacklisted-supplier", "/v1/api/probs/out-of-credit", "/v1/api/probs"}
+	accepts := []string{"text/html", jsonType}
+	want := make(map[[2]string]string, len(paths)*len(accepts))
+
+	for _, path := range paths {
+		for _, a := range accepts {
+			want[[2]string{path, a}] = discover(t, h, http.MethodGet, path, accept(a)).Body.String()
+		}
+	}
+
+	var wg sync.WaitGroup
+
+	for i := range requests {
+		path, a := paths[i%len(paths)], accepts[i%len(accepts)]
+
+		wg.Go(func() {
+			status, body := fetchURL(t, srv.Client(), srv.URL+path, a)
+
+			if status != http.StatusOK || body != want[[2]string{path, a}] {
+				t.Errorf("request %d %s %s: status %d with a different body", i, path, a, status)
+			}
+		})
+	}
+
+	wg.Wait()
+}
+
+// Murphy row, as for Wrap, Write and Recover: Discovery and DiscoveryPath
+// on a nil *Handler panic where they are called, naming the mistake, rather
+// than a nil dereference inside a request.
+func TestDiscovery_NilHandler(t *testing.T) {
+	t.Parallel()
+
+	var h *prblm.Handler
+
+	tests := map[string]func(){
+		"Discovery":     func() { h.Discovery() },
+		"DiscoveryPath": func() { h.DiscoveryPath() },
+	}
+
+	for method, call := range tests {
+		t.Run(method, func(t *testing.T) {
+			t.Parallel()
+
+			if msg := mustPanic(t, call); !strings.Contains(msg, "Handler."+method) || !strings.Contains(msg, "problem handler") {
+				t.Errorf("panic %q does not name Handler.%s and the problem handler", msg, method)
 			}
 		})
 	}

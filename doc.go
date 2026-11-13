@@ -59,6 +59,12 @@
 // [ErrInvalidType]. Types are never built from the request's Host header,
 // which a client controls.
 //
+// [DefineType] defines a type once, with its status, title and description,
+// and [Type.New] builds its problems. Registered with [WithTypes], the
+// definitions are documented at their type URLs by [Handler.Discovery],
+// mounted at [Handler.DiscoveryPath]: an HTML page, or JSON for a client
+// that prefers it, and an index at the namespace path.
+//
 // # Safe defaults
 //
 // A handler created without options is safe to use as is:

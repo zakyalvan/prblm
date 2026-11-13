@@ -122,7 +122,7 @@ Documentation responses SHALL escape all definition text in HTML and JSON. They 
 |-------|-------------|--------|----------|--------|
 | `Locked` | `<script>alert(1)</script>` | HTML | `&lt;script&gt;alert(1)&lt;/script&gt;` | `<script>` |
 | `<img src=x onerror=alert(1)>` | `x` | HTML | `&lt;img src=x onerror=alert(1)&gt;` | `<img` |
-| `Locked` | `"quoted" & <tagged>` | JSON | `"\"quoted\" & <tagged>"` | `<tagged>` |
+| `Locked` | `"quoted" & <tagged>` | JSON | `"\"quoted\" \u0026 \u003ctagged\u003e"`, which decodes to the description | `<tagged>` |
 | `Locked` | `line one\nline two` | HTML | `line one` | `<script>` |
 
 #### Scenario: Security headers
@@ -155,7 +155,7 @@ Successful documentation and index responses SHALL carry `Cache-Control: public,
 ##### Examples: not cacheable
 | path | accept | status | caching |
 |------|--------|--------|---------|
-| `/v1/api/probs/unknown` | `text/html` | 404 | has no `Cache-Control` and no `ETag` |
+| `/v1/api/probs/unknown` | `text/html` | 404 | has the problem default `Cache-Control: no-store`, not `public, max-age=3600`, and no `ETag` |
 
 #### Scenario: Conditional requests
 - **Given** the handler above and the `ETag` `E` of the HTML documentation of `out-of-credit`

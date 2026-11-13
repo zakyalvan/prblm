@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"runtime/debug"
 	"slices"
+	"strings"
 )
 
 // ErrInvalidStatus is wrapped by the note the [OnError] hook receives when a
@@ -192,7 +193,10 @@ func (h *Handler) enrich(ctx context.Context, p *Problem) {
 // resolveType turns the relative sub-type of p into a type under the
 // handler's namespace. An empty type, about:blank, an absolute URI such as a
 // urn: and an absolute path are kept. Any other relative type is a mistake:
-// it becomes about:blank, and is reported to the hook. Without a namespace, every type is kept.
+// it becomes about:blank, and is reported to the hook with a note wrapping
+// ErrInvalidType. Without a namespace, every type is kept. With discovery
+// on, a resolved sub-type without a definition is reported with a note
+// wrapping ErrUndocumentedType, because its type URL leads to a 404.
 //
 // Only the configured namespace is used, never the request's Host header,
 // which a client controls.
@@ -202,7 +206,12 @@ func (h *Handler) resolveType(ctx context.Context, p *Problem) {
 	}
 
 	if isSubtype(p.Type) {
-		p.Type = h.namespace + "/" + p.Type
+		subtype := p.Type
+		p.Type = h.namespace + "/" + subtype
+
+		if h.discovery != nil && !h.discovery.documents(subtype) {
+			h.report(ctx, fmt.Errorf("%w: %q", ErrUndocumentedType, subtype), p)
+		}
 
 		return
 	}
@@ -531,11 +540,11 @@ func (h *Handler) newDiscovery() *discovery {
 			Title:       t.title,
 			Description: t.description,
 		}
-		d.docs[t.subtype] = pages{html: htmlPage(docTemplate, doc), json: jsonPage(doc)}
+		d.docs[t.subtype] = pages{html: htmlPage(t.subtype, docTemplate, doc), json: jsonPage(t.subtype, doc)}
 		index.Types = append(index.Types, indexEntry{Type: doc.Type, Subtype: doc.Subtype, Status: doc.Status, Title: doc.Title})
 	}
 
-	d.index = pages{html: htmlPage(indexTemplate, index), json: jsonPage(index)}
+	d.index = pages{html: htmlPage("index", indexTemplate, index), json: jsonPage("index", index)}
 
 	return d
 }
@@ -548,7 +557,11 @@ func (h *Handler) newDiscovery() *discovery {
 //	if path := h.DiscoveryPath(); path != "" {
 //		mux.Handle("GET "+path+"/", h.Discovery())
 //	}
+//
+// DiscoveryPath panics when h is nil.
 func (h *Handler) DiscoveryPath() string {
+	h.mustExist("DiscoveryPath")
+
 	if h.discovery == nil {
 		return ""
 	}
@@ -560,27 +573,39 @@ func (h *Handler) DiscoveryPath() string {
 // registered types at their type URLs, so a client can dereference a
 // problem's type, as RFC 9457 recommends. It is never nil: with discovery
 // off, it answers every request with a 404 problem.
+//
+// Discovery panics when h is nil.
 func (h *Handler) Discovery() http.Handler {
+	h.mustExist("Discovery")
+
 	return http.HandlerFunc(h.serveDiscovery)
 }
 
 // serveDiscovery serves one discovery request.
 func (h *Handler) serveDiscovery(w http.ResponseWriter, r *http.Request) {
 	d := h.discovery
-	if d == nil {
+
+	switch {
+	case d == nil:
 		h.writeProblem(w, r, New(http.StatusNotFound))
+
+		return
+	case r.Method != http.MethodGet && r.Method != http.MethodHead:
+		h.writeProblem(w, r, New(http.StatusMethodNotAllowed, WithHeader("Allow", "GET, HEAD")))
 
 		return
 	}
 
-	doc, ok := d.lookup(r.URL.Path)
+	doc, ok := d.lookup(r.URL)
 	if !ok {
 		h.writeProblem(w, r, New(http.StatusNotFound))
 
 		return
 	}
 
-	writeDiscovery(w, r, doc.negotiate(requestOf(r).Accept).response())
+	// Repeated If-None-Match lines form one list (RFC 9110, section 5.3).
+	ifNoneMatch := strings.Join(r.Header.Values("If-None-Match"), ",")
+	writeDiscovery(w, r, doc.negotiate(requestOf(r).Accept).response(ifNoneMatch))
 }
 
 // writeProblem answers a discovery request with p, completed and rendered

@@ -32,6 +32,12 @@ func WithNamespace(ns string) Option {
 // so a hook can tell it apart from the error being answered with errors.Is.
 var ErrInvalidType = errors.New("prblm: problem type is not a valid sub-type")
 
+// ErrUndocumentedType is wrapped by the note the [OnError] hook receives when
+// discovery is on (see [WithTypes]) and a problem's sub-type has no
+// registered definition. The problem is sent unchanged, but its type URL
+// leads to a 404, so the note makes the broken documentation link visible.
+var ErrUndocumentedType = errors.New("prblm: problem type has no registered definition")
+
 // isKeptType reports whether typ is never resolved against a namespace:
 // empty (about:blank), an absolute path, or a URI with a scheme, which
 // includes about:blank itself.

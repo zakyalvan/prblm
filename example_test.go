@@ -356,3 +356,28 @@ func ExampleDefineType() {
 	// 409
 	// {"type":"/v1/api/probs/contracts/blacklisted-supplier","title":"Supplier is blacklisted","status":409,"instance":"/v1/contracts","supplier_id":42}
 }
+
+func ExampleHandler_Discovery() {
+	outOfCredit := prblm.DefineType("out-of-credit", http.StatusForbidden, "Out of credit",
+		"The account balance is below the price of the request.")
+
+	h := prblm.NewHandler(prblm.WithNamespace("/v1/api/probs"), prblm.WithTypes(outOfCredit))
+
+	mux := http.NewServeMux()
+	// Serve the documentation of every registered type at its type URL.
+	if path := h.DiscoveryPath(); path != "" {
+		mux.Handle("GET "+path+"/", h.Discovery())
+	}
+
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/v1/api/probs/out-of-credit", http.NoBody)
+	req.Header.Set("Accept", "application/json")
+
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	fmt.Println(rec.Code, rec.Header().Get("Content-Type"), rec.Header().Get("Cache-Control"))
+	fmt.Println(rec.Body.String())
+	// Output:
+	// 200 application/json public, max-age=3600
+	// {"type":"/v1/api/probs/out-of-credit","subtype":"out-of-credit","status":403,"title":"Out of credit","description":"The account balance is below the price of the request."}
+}
