@@ -100,3 +100,34 @@ func ExampleScope() {
 	// /v1/contracts/1 423
 	// /v1/vessels/1 500
 }
+
+func ExampleErrorHandler_discovery() {
+	outOfCredit := prblm.DefineType("out-of-credit", http.StatusForbidden, "Out of credit",
+		"The account balance is below the price of the request.")
+
+	// The error handler also serves the documentation of the registered
+	// types for paths that reach it as fiber's route-not-found error.
+	app := fiber.New(fiber.Config{ErrorHandler: fiberprblm.ErrorHandler(
+		prblm.WithNamespace("/v1/api/probs"),
+		prblm.WithTypes(outOfCredit),
+	)})
+
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/v1/api/probs/out-of-credit", http.NoBody)
+	req.Header.Set("Accept", "application/json")
+
+	res, err := app.Test(req)
+	if err != nil {
+		fmt.Println(err)
+
+		return
+	}
+
+	body, _ := io.ReadAll(res.Body)
+	_ = res.Body.Close()
+
+	fmt.Println(res.StatusCode, res.Header.Get("Content-Type"))
+	fmt.Println(string(body))
+	// Output:
+	// 200 application/json
+	// {"type":"/v1/api/probs/out-of-credit","subtype":"out-of-credit","status":403,"title":"Out of credit","description":"The account balance is below the price of the request."}
+}

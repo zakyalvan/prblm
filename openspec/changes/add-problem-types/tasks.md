@@ -141,13 +141,14 @@ Every slice ends with:
 
 ## 6. Slice: the fiber error handler serves discovery on route-not-found
 
-- [ ] 6.1 Prove how fiber v3 lets the error handler tell a router 404 from a handler returning `fiber.ErrNotFound` (CLAUDE.md rule 8; design D6); verify `go test -run TestFiberNotFound_Distinguishable` passes, and record the signal used in the task notes. If none is reliable, apply the D6 fallback and record why.
-- [ ] 6.2 Serve discovery from `ErrorHandler` (fiber-adapter / Scenario: Discovery through fiber, all rows); verify `go test -race -run TestErrorHandler_Discovery` passes using `app.Test`
+- [x] 6.1 Prove how fiber v3 lets the error handler tell a router 404 from a handler returning `fiber.ErrNotFound` (CLAUDE.md rule 8; design D6); verify `go test -run TestFiberNotFound_Distinguishable` passes, and record the signal used in the task notes. If none is reliable, apply the D6 fallback and record why.
+  - Result (fiber v3.7.0): the router returns the sentinel `fiber.ErrNotFound` itself (router.go), so the error value cannot tell a router 404 from a handler returning `fiber.ErrNotFound`, and the identity half of the D6 fallback would not work. The reliable signal is `c.Matched()`, true only when an endpoint route (not `app.Use` middleware) matched: `TestFiberNotFound_Distinguishable` in `fiberprblm/notfound_test.go` passes for a router 404 with and without middleware, and for a handler returning `fiber.ErrNotFound` with and without middleware. `ErrorHandler` serves discovery when `!c.Matched()` and the error is `fiber.ErrNotFound`.
+- [x] 6.2 Serve discovery from `ErrorHandler` (fiber-adapter / Scenario: Discovery through fiber, all rows); verify `go test -race -run TestErrorHandler_Discovery` passes using `app.Test`
   - RED: every served and not-served row, including the handler-returned `fiber.ErrNotFound` row
   - GREEN: the discovery branch from design D6, with a minimal recording writer copied to `c`
   - REFACTOR: Extract Function `serveDiscovery`, then /simplify
-- [ ] 6.3 Document fiber discovery (godoc, `ExampleErrorHandler_discovery`); verify `go test -run Example` passes
-- [ ] 6.4 Verify slice 6 end to end. Check `go tool cover -func` covers every discovery branch in `ErrorHandler` and the recording writer, and run diagnostics, vet, lint, `-race` and `GOWORK=off` in `fiberprblm`.
+- [x] 6.3 Document fiber discovery (godoc, `ExampleErrorHandler_discovery`); verify `go test -run Example` passes
+- [x] 6.4 Verify slice 6 end to end. Check `go tool cover -func` covers every discovery branch in `ErrorHandler` and the recording writer, and run diagnostics, vet, lint, `-race` and `GOWORK=off` in `fiberprblm`.
 
 ## 7. Slice: parity across net/http, gin and fiber, and documentation
 

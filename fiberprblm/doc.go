@@ -52,6 +52,15 @@
 // With fiber's default error handler instead, the client gets a plain-text
 // 500 "Internal Server Error": the panic value never leaks either way.
 //
+// # Type documentation
+//
+// When the options register problem types with [prblm.WithTypes],
+// [ErrorHandler] serves their documentation for GET and HEAD requests under
+// the namespace path that reach it as fiber's route-not-found error, exactly
+// as the core's [prblm.Handler.Discovery]. A route registered at such a path
+// takes precedence, and a handler that returns fiber.ErrNotFound gets a 404
+// problem as usual.
+//
 // # Safe defaults
 //
 // The problem semantics are the core's, unchanged: an error no mapper

@@ -411,6 +411,20 @@ app.Group("/v1/contracts", fiberprblm.Scope(prblm.Status(ErrLocked, http.StatusL
 	Get("/:id", func(fiber.Ctx) error { return ErrLocked }) // a 423 problem
 ```
 
+**Type documentation:** when the options register problem types (see
+[Discovering problem types](#discovering-problem-types)), `ErrorHandler` also serves their
+documentation for GET and HEAD requests under the namespace path that reach it as fiber's
+route-not-found error, exactly as `Handler.Discovery` does. A route at a documentation path wins,
+and a handler that returns `fiber.ErrNotFound` still gets a 404 problem. *(Mirrors
+`ExampleErrorHandler_discovery`.)*
+
+```go
+app := fiber.New(fiber.Config{ErrorHandler: fiberprblm.ErrorHandler(
+	prblm.WithNamespace("/v1/api/probs"),
+	prblm.WithTypes(outOfCredit),
+)})
+```
+
 ### Framework differences
 
 For the same handler and request, net/http, gin and fiber send the same status, `Content-Type`,

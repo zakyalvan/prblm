@@ -23,10 +23,24 @@ import (
 // is left alone, as is the response to a client that went away (the request
 // context is canceled and the error wraps [context.Canceled]); the error then
 // only reaches the [prblm.OnError] hook.
+//
+// When opts register problem types (see [prblm.WithTypes]), ErrorHandler
+// also serves their documentation, exactly as [prblm.Handler.Discovery]
+// does, for GET and HEAD requests under the namespace path that reach it as
+// fiber's route-not-found error. A route registered at a documentation path
+// takes precedence, and a handler that returns fiber.ErrNotFound gets a 404
+// problem as usual.
 func ErrorHandler(opts ...prblm.Option) fiber.ErrorHandler {
 	h := prblm.NewHandler(opts...)
+	discovery, discoveryPath := h.Discovery(), h.DiscoveryPath()
 
 	return func(c fiber.Ctx, err error) error {
+		// A request URI net/http cannot parse holds no documentation, so it
+		// falls through and the route-not-found error is answered as usual.
+		if isDiscovery(c, err, discoveryPath) && serveDiscovery(c, discovery) == nil {
+			return nil
+		}
+
 		res, ok := respond(h, c, err)
 		// Fiber sends nothing before the handler returns, so a buffered
 		// body is replaced. A body stream is the handler's own response, and

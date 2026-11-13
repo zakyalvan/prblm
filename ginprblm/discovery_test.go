@@ -1,6 +1,7 @@
 package ginprblm_test
 
 import (
+	"cmp"
 	"encoding/json"
 	"maps"
 	"net/http"
@@ -19,117 +20,133 @@ func discoveryOptions(extra ...prblm.Option) []prblm.Option {
 	return append([]prblm.Option{prblm.WithNamespace("/v1/api/probs"), prblm.WithTypes(OutOfCredit)}, extra...)
 }
 
+// discoveryEngine returns an engine using Middleware via engine.Use with
+// the discovery options and extra, after routes, when not nil, registered
+// its own handlers.
+func discoveryEngine(routes func(*gin.Engine), extra ...prblm.Option) *gin.Engine {
+	engine := gin.New()
+	engine.Use(ginprblm.Middleware(discoveryOptions(extra...)...))
+
+	if routes != nil {
+		routes(engine)
+	}
+
+	return engine
+}
+
+// custom answers with status and the body "custom".
+func custom(status int) gin.HandlerFunc {
+	return func(c *gin.Context) { c.String(status, "custom") }
+}
+
 // gin-adapter / Scenario: Discovery through gin.
 func TestMiddleware_Discovery(t *testing.T) {
 	t.Parallel()
 
 	const doc = "/v1/api/probs/out-of-credit"
 
-	custom := func(status int) gin.HandlerFunc {
-		return func(c *gin.Context) { c.String(status, "custom") }
-	}
-	used := func(opts ...prblm.Option) func(*gin.Engine) {
-		return func(e *gin.Engine) { e.Use(ginprblm.Middleware(discoveryOptions(opts...)...)) }
-	}
-	withNoRoute := func(e *gin.Engine) {
-		used()(e)
-		e.NoRoute(custom(http.StatusNotFound))
-	}
-
-	// etag is the ETag of the JSON documentation, for the revalidation row.
-	etagEngine := gin.New()
-	used()(etagEngine)
-	etag := serve(t, etagEngine, request(t, http.MethodGet, doc, "")).Header().Get("ETag")
+	etag := serve(t, discoveryEngine(nil), request(t, http.MethodGet, doc)).Header().Get("ETag")
+	noRoute := func(e *gin.Engine) { e.NoRoute(custom(http.StatusNotFound)) }
 
 	tests := []struct {
 		name   string
-		setup  func(*gin.Engine)
+		engine *gin.Engine
 		method string
 		path   string
 		header http.Header
 		check  func(t *testing.T, rec *httptest.ResponseRecorder)
 	}{
-		{name: "served", setup: used(), path: doc, check: isDocumentation},
-		{name: "head", setup: used(), method: http.MethodHead, path: doc, check: func(t *testing.T, rec *httptest.ResponseRecorder) {
-			t.Helper()
-
-			if rec.Code != http.StatusOK || rec.Header().Get("Content-Type") != "application/json" || rec.Body.Len() != 0 {
-				t.Errorf("response %d %q with %d body bytes, want 200 JSON headers only", rec.Code, rec.Header().Get("Content-Type"), rec.Body.Len())
-			}
-		}},
-		{name: "index", setup: used(), path: "/v1/api/probs", check: func(t *testing.T, rec *httptest.ResponseRecorder) {
-			t.Helper()
-
-			if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"subtype":"out-of-credit"`) {
-				t.Errorf("response %d %s, want the index with out-of-credit", rec.Code, rec.Body.String())
-			}
-		}},
-		{name: "unknown", setup: used(), path: "/v1/api/probs/unknown", check: isNotFoundProblem},
+		{name: "served", engine: discoveryEngine(nil), path: doc, check: isDocumentation},
+		{name: "head", engine: discoveryEngine(nil), method: http.MethodHead, path: doc, check: isHeadersOnly},
+		{name: "index", engine: discoveryEngine(nil), path: "/v1/api/probs", check: isIndex},
+		{name: "unknown", engine: discoveryEngine(nil), path: "/v1/api/probs/unknown", check: isNotFoundProblem},
 		{
-			name: "revalidated", setup: used(), path: doc, header: http.Header{"If-None-Match": {etag}},
-			check: func(t *testing.T, rec *httptest.ResponseRecorder) {
-				t.Helper()
-
-				if rec.Code != http.StatusNotModified || rec.Header().Get("ETag") != etag ||
-					rec.Header().Get("Cache-Control") != "public, max-age=3600" || rec.Body.Len() != 0 {
-					t.Errorf("response %d ETag %q Cache-Control %q with %d body bytes, want 304 %q",
-						rec.Code, rec.Header().Get("ETag"), rec.Header().Get("Cache-Control"), rec.Body.Len(), etag)
-				}
-			},
+			name: "revalidated", engine: discoveryEngine(nil), path: doc,
+			header: http.Header{"If-None-Match": {etag}}, check: isRevalidated(etag),
 		},
-		{name: "served before NoRoute", setup: withNoRoute, path: doc, check: isDocumentation},
+		{name: "served before NoRoute", engine: discoveryEngine(noRoute), path: doc, check: isDocumentation},
 		{
-			name: "route wins",
-			setup: func(e *gin.Engine) {
-				used()(e)
-				e.GET(doc, custom(http.StatusOK))
-			},
-			path:  doc,
-			check: hasBody(http.StatusOK, "custom"),
+			name:   "route wins",
+			engine: discoveryEngine(func(e *gin.Engine) { e.GET(doc, custom(http.StatusOK)) }),
+			path:   doc,
+			check:  hasBody(http.StatusOK, "custom"),
 		},
-		{name: "post", setup: used(), method: http.MethodPost, path: doc, check: isNotDocumentation},
-		{name: "outside the namespace", setup: used(), path: "/v1/other/out-of-credit", check: isNotDocumentation},
-		{name: "discovery off", setup: used(prblm.WithoutDiscovery()), path: doc, check: isNotDocumentation},
+		{name: "post", engine: discoveryEngine(nil), method: http.MethodPost, path: doc, check: isNotFoundProblem},
+		{name: "outside the namespace", engine: discoveryEngine(nil), path: "/v1/other/out-of-credit", check: isNotFoundProblem},
+		{name: "discovery off", engine: discoveryEngine(nil, prblm.WithoutDiscovery()), path: doc, check: isNotFoundProblem},
+		{name: "middleware only on a group", engine: groupOnlyEngine(), path: doc, check: isNotDocumentation},
 		{
-			name: "middleware only on a group",
-			setup: func(e *gin.Engine) {
-				e.Group("/v1/vessels", ginprblm.Middleware(discoveryOptions()...)).GET("/:id", custom(http.StatusOK))
-			},
-			path:  doc,
-			check: isNotDocumentation,
+			name:   "NoRoute keeps other paths",
+			engine: discoveryEngine(noRoute),
+			path:   "/v1/other/out-of-credit",
+			check:  hasBody(http.StatusNotFound, "custom"),
 		},
-		{name: "NoRoute keeps other paths", setup: withNoRoute, path: "/v1/other/out-of-credit", check: hasBody(http.StatusNotFound, "custom")},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			engine := gin.New()
-			tt.setup(engine)
+			method := cmp.Or(tt.method, http.MethodGet)
 
-			method := tt.method
-			if method == "" {
-				method = http.MethodGet
-			}
-
-			req := request(t, method, tt.path, "")
+			req := request(t, method, tt.path)
 			maps.Copy(req.Header, tt.header)
 
-			tt.check(t, serve(t, engine, req))
+			tt.check(t, serve(t, tt.engine, req))
 		})
 	}
 }
 
-// request builds a request for target with Accept: application/json and,
-// when not empty, body.
-func request(t *testing.T, method, target, body string) *http.Request {
+// groupOnlyEngine returns an engine with Middleware only on the group
+// /v1/vessels, which never sees unmatched paths.
+func groupOnlyEngine() *gin.Engine {
+	engine := gin.New()
+	engine.Group("/v1/vessels", ginprblm.Middleware(discoveryOptions()...)).GET("/:id", custom(http.StatusOK))
+
+	return engine
+}
+
+// request builds a request for target with Accept: application/json.
+func request(t *testing.T, method, target string) *http.Request {
 	t.Helper()
 
-	req := httptest.NewRequestWithContext(t.Context(), method, target, strings.NewReader(body))
+	req := httptest.NewRequestWithContext(t.Context(), method, target, http.NoBody)
 	req.Header.Set("Accept", "application/json")
 
 	return req
+}
+
+// isHeadersOnly checks that rec is the JSON documentation's headers without
+// a body, the answer to HEAD.
+func isHeadersOnly(t *testing.T, rec *httptest.ResponseRecorder) {
+	t.Helper()
+
+	if rec.Code != http.StatusOK || rec.Header().Get("Content-Type") != "application/json" || rec.Body.Len() != 0 {
+		t.Errorf("response %d %q with %d body bytes, want 200 JSON headers only", rec.Code, rec.Header().Get("Content-Type"), rec.Body.Len())
+	}
+}
+
+// isIndex checks that rec is the JSON index with out-of-credit.
+func isIndex(t *testing.T, rec *httptest.ResponseRecorder) {
+	t.Helper()
+
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"subtype":"out-of-credit"`) {
+		t.Errorf("response %d %s, want the index with out-of-credit", rec.Code, rec.Body.String())
+	}
+}
+
+// isRevalidated returns a check that rec is a bodiless 304 with etag and
+// the public Cache-Control.
+func isRevalidated(etag string) func(*testing.T, *httptest.ResponseRecorder) {
+	return func(t *testing.T, rec *httptest.ResponseRecorder) {
+		t.Helper()
+
+		if rec.Code != http.StatusNotModified || rec.Header().Get("ETag") != etag ||
+			rec.Header().Get("Cache-Control") != "public, max-age=3600" || rec.Body.Len() != 0 {
+			t.Errorf("response %d ETag %q Cache-Control %q with %d body bytes, want 304 %q",
+				rec.Code, rec.Header().Get("ETag"), rec.Header().Get("Cache-Control"), rec.Body.Len(), etag)
+		}
+	}
 }
 
 // isDocumentation checks that rec is the JSON documentation of out-of-credit.

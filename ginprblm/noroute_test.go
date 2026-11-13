@@ -16,17 +16,15 @@ func TestGinNoRoute_RunsGlobalMiddleware(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name      string
-		noRoute   string
-		path      string
-		ran       bool
-		fullPath  string
-		isMatched bool
+		name     string
+		noRoute  string
+		path     string
+		fullPath string
 	}{
-		{name: "unmatched", path: "/v1/api/probs/x", ran: true},
-		{name: "unmatched with NoRoute after Use", noRoute: "after", path: "/v1/api/probs/x", ran: true},
-		{name: "unmatched with NoRoute before Use", noRoute: "before", path: "/v1/api/probs/x", ran: true},
-		{name: "matched", path: "/v1/vessels/7", ran: true, fullPath: "/v1/vessels/:id", isMatched: true},
+		{name: "unmatched", path: "/v1/api/probs/x"},
+		{name: "unmatched with NoRoute after Use", noRoute: "after", path: "/v1/api/probs/x"},
+		{name: "unmatched with NoRoute before Use", noRoute: "before", path: "/v1/api/probs/x"},
+		{name: "matched", path: "/v1/vessels/7", fullPath: "/v1/vessels/:id"},
 	}
 
 	for _, tt := range tests {
@@ -59,8 +57,8 @@ func TestGinNoRoute_RunsGlobalMiddleware(t *testing.T) {
 
 			rec := serve(t, engine, get(t, tt.path))
 
-			if ran != tt.ran || fullPath != tt.fullPath {
-				t.Errorf("middleware ran %v with FullPath %q, want %v %q", ran, fullPath, tt.ran, tt.fullPath)
+			if !ran || fullPath != tt.fullPath {
+				t.Errorf("middleware ran %v with FullPath %q, want it to run with %q", ran, fullPath, tt.fullPath)
 			}
 
 			if tt.noRoute != "" && rec.Body.String() != "custom" {

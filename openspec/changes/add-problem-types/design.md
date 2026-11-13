@@ -185,7 +185,9 @@ In `Middleware`, before `c.Next()`, the middleware serves discovery directly thr
 
 Under CLAUDE.md rule 8, the first gin task proves both with tests before building on them. If either fails, slice 5 is re-planned: the fallback is `engine.NoRoute(ginprblm.Discovery(opts...))`, which would need a spec change.
 
-The discovery response goes through `deferredWriter`. A 200 commits on its body write. A 304, or any HEAD response, has no body, so the branch commits the recorded status explicitly (`commitNow`) before returning. Otherwise the status would only be recorded (gin-adapter / Discovery through gin, 304 and HEAD rows).
+The discovery branch runs before `deferredWriter` is installed: that writer exists so a problem can replace the handlers' response, which a discovery response never needs. It writes to gin's own writer and calls `c.Writer.WriteHeaderNow()`, because a 304 or a HEAD response has no body and its status would otherwise only be recorded (gin-adapter / Discovery through gin, 304 and HEAD rows).
+
+**Verified (task 5.1, gin v1.12.0):** `TestGinNoRoute_RunsGlobalMiddleware` confirms both claims, with no `NoRoute` handler and with one registered before or after `Use`. The fallback was not needed.
 
 - **Failure modes:**
   - **Middleware only on a group:** it never sees unmatched paths, so discovery isn't served. Specified, and documented.
@@ -200,9 +202,9 @@ In `ErrorHandler`, before resolving, the handler serves discovery through the co
 - the error is fiber's route-not-found
 - the path is the discovery path or under it
 
-fiber has no `http.ResponseWriter`, so the core handler writes into a minimal unexported in-package writer that records status, headers and body. `ErrorHandler` copies that result to `c` with `c.Status`, `c.Set` and `c.Send`. This avoids the `adaptor` middleware and its `net/http` conversion of the whole request.
+fiber has no `http.ResponseWriter`, so the core handler writes into a minimal unexported in-package writer that records status, headers and body. `ErrorHandler` sends that result through the adapter's existing `send`, the same path a problem response takes. The core gets an `http.Request` built from `c.OriginalURL()` and every request header. This avoids the `adaptor` middleware and its `net/http` conversion of the whole request. A request URI fiber accepts but net/http cannot parse (a malformed escape such as `%zz`) holds no documentation, so it falls through to the usual 404 problem.
 
-**Unverified fiber behavior.** Telling a router 404 apart from a handler that returns `fiber.ErrNotFound` depends on fiber v3's `c.Route()` on unmatched requests. Under rule 8, the first fiber task proves the distinguishing signal with a test (the "returning `fiber.ErrNotFound`" spec row). If no reliable signal exists, the fallback is to compare the error by identity with fiber's routing error *and* require that no route path matches. The spec row stays the acceptance criterion either way.
+**Verified (task 6.1, fiber v3.7.0):** the router returns the sentinel `fiber.ErrNotFound` itself, so comparing the error by identity cannot tell a router 404 from a handler returning `fiber.ErrNotFound`. The signal is `c.Matched()`, which fiber sets only when an endpoint route (not `app.Use` middleware) matched; `TestFiberNotFound_Distinguishable` proves it with and without middleware. The condition is "the error is `fiber.ErrNotFound` and `!c.Matched()`".
 
 - **Failure modes:**
   - **A streamed body:** impossible on route-not-found.
