@@ -75,4 +75,28 @@ var (
 	// of the resource: a duplicate, a state that forbids the operation, or a
 	// concurrent change. It becomes a 409 Conflict problem.
 	ErrConflict = errors.New("prblm: conflict")
+
+	// ErrPreconditionFailed reports that a conditional request header, such
+	// as If-Match or If-Unmodified-Since, does not hold, for example in
+	// optimistic concurrency control. It becomes a 412 Precondition Failed
+	// problem. It is only for those headers: when the current state of the
+	// resource forbids the operation, return [ErrConflict].
+	ErrPreconditionFailed = errors.New("prblm: precondition failed")
+
+	// ErrRateLimited reports that the caller sent too many requests. It
+	// becomes a 429 Too Many Requests problem without a Retry-After header,
+	// since a sentinel carries no delay; a client may then retry at once. Add
+	// the header with a consumer mapper for ErrRateLimited, or with an
+	// enricher that sets it on 429 problems:
+	//
+	//	prblm.WithEnrichers(func(_ context.Context, p *prblm.Problem) {
+	//		if p.Status == http.StatusTooManyRequests && p.Header.Get("Retry-After") == "" {
+	//			if p.Header == nil {
+	//				p.Header = make(http.Header)
+	//			}
+	//
+	//			p.Header.Set("Retry-After", "30")
+	//		}
+	//	})
+	ErrRateLimited = errors.New("prblm: rate limited")
 )

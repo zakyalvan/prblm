@@ -311,6 +311,34 @@ func ExampleErrUnauthenticated() {
 	// {"title":"Unauthorized","status":401,"detail":"Authentication is required.","instance":"/v1/vessels/7"}
 }
 
+func ExampleErrRateLimited() {
+	// The default 429 has no Retry-After header; an enricher adds one.
+	h := prblm.NewHandler(prblm.WithEnrichers(func(_ context.Context, p *prblm.Problem) {
+		if p.Status == http.StatusTooManyRequests && p.Header.Get("Retry-After") == "" {
+			if p.Header == nil {
+				p.Header = make(http.Header)
+			}
+
+			p.Header.Set("Retry-After", "30")
+		}
+	}))
+
+	handler := h.Wrap(func(http.ResponseWriter, *http.Request) error {
+		return fmt.Errorf("tenant 42 over quota: %w", prblm.ErrRateLimited)
+	})
+
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/v1/vessels/7", http.NoBody))
+
+	fmt.Println(rec.Code)
+	fmt.Println(rec.Header().Get("Retry-After"))
+	fmt.Println(rec.Body.String())
+	// Output:
+	// 429
+	// 30
+	// {"title":"Too Many Requests","status":429,"detail":"Too many requests.","instance":"/v1/vessels/7"}
+}
+
 func ExampleScopeMappers() {
 	errLocked := errors.New("locked")
 	h := prblm.NewHandler()

@@ -77,12 +77,12 @@
 
 ## 3. Slice: request-state errors (412, 429)
 
-- [ ] 3.1 Map `ErrPreconditionFailed` and `ErrRateLimited` (error-sentinels / Scenario: Sentinel returned directly, Scenario: Error text, their rows); verify `go test -race -run 'TestSentinels_(Direct|ErrorText)'` passes
+- [x] 3.1 Map `ErrPreconditionFailed` and `ErrRateLimited` (error-sentinels / Scenario: Sentinel returned directly, Scenario: Error text, their rows); verify `go test -race -run 'TestSentinels_(Direct|ErrorText)'` passes
   - RED: the two rows in both tables
   - GREEN: the two variables and table rows
   - REFACTOR: /simplify
-- [ ] 3.2 Document them (`ErrPreconditionFailed` only for conditional request headers, `ErrConflict` for state conflicts; `ErrRateLimited` has no `Retry-After` and how to add one with a consumer mapper or enricher), add them to the README catalog table and the CHANGELOG entry; verify `go test -run Example` passes
-- [ ] 3.3 Verify slice 3 end to end and check `go tool cover -func`; run `gofmt`, `go vet`, `golangci-lint run ./...`, `go test -race ./...` and `GOWORK=off go test ./...` in the root module; run gopls `go_diagnostics` on changed files
+- [x] 3.2 Document them (`ErrPreconditionFailed` only for conditional request headers, `ErrConflict` for state conflicts; `ErrRateLimited` has no `Retry-After` and how to add one with a consumer mapper or enricher), add them to the README catalog table and the CHANGELOG entry; verify `go test -run Example` passes
+- [x] 3.3 Verify slice 3 end to end and check `go tool cover -func`; run `gofmt`, `go vet`, `golangci-lint run ./...`, `go test -race ./...` and `GOWORK=off go test ./...` in the root module; run gopls `go_diagnostics` on changed files
 
 ## 4. Slice: dependency errors (503, 504, then 502)
 

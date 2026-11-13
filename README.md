@@ -85,6 +85,8 @@ handler := h.Wrap(func(_ http.ResponseWriter, r *http.Request) error {
 | `ErrPermissionDenied` | 403 | `You are not allowed to perform this action.` |
 | `ErrNotFound` | 404 | `The requested resource was not found.` |
 | `ErrConflict` | 409 | `The request conflicts with the current state of the resource.` |
+| `ErrPreconditionFailed` | 412 | `A precondition of the request was not met.` |
+| `ErrRateLimited` | 429 | `Too many requests.` |
 
 Each problem is `about:blank` with the status phrase as title and the fixed detail. The wrap text,
 the error string and any wrapped cause never reach the client; the `OnError` hook receives the
@@ -100,6 +102,11 @@ error as returned.
 - `WithoutBuiltins()` turns the sentinels off with the other built-ins.
 - `ErrPermissionDenied` (403) confirms that the resource exists; when that is itself secret, return
   `ErrNotFound`.
+- `ErrPreconditionFailed` (412) is only for conditional request headers such as `If-Match`; when
+  the current state of the resource forbids the operation, return `ErrConflict` (409).
+- The default 429 has no `Retry-After` header, since a sentinel carries no delay. Add it with a
+  consumer mapper for `ErrRateLimited`, or an enricher that sets it on 429 problems (see
+  `ExampleErrRateLimited`).
 - The default 401 has no `WWW-Authenticate` header, which RFC 9110 requires, because the library
   cannot know your scheme. Add it with a consumer mapper. *(Mirrors `ExampleErrUnauthenticated`.)*
 

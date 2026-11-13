@@ -55,6 +55,8 @@ var sentinels = []sentinel{
 	{err: ErrPermissionDenied, status: http.StatusForbidden, detail: "You are not allowed to perform this action."},
 	{err: ErrNotFound, status: http.StatusNotFound, detail: "The requested resource was not found."},
 	{err: ErrConflict, status: http.StatusConflict, detail: "The request conflicts with the current state of the resource."},
+	{err: ErrPreconditionFailed, status: http.StatusPreconditionFailed, detail: "A precondition of the request was not met."},
+	{err: ErrRateLimited, status: http.StatusTooManyRequests, detail: "Too many requests."},
 }
 
 // mapSentinel maps the first sentinel that err matches, as errors.Is reports

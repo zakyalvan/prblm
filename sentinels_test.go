@@ -65,6 +65,8 @@ func TestSentinels_Direct(t *testing.T) {
 		{name: "permission denied", err: prblm.ErrPermissionDenied, expected: 403, title: "Forbidden", detail: "You are not allowed to perform this action."},
 		{name: "not found", err: prblm.ErrNotFound, expected: 404, title: "Not Found", detail: "The requested resource was not found."},
 		{name: "conflict", err: prblm.ErrConflict, expected: 409, title: "Conflict", detail: "The request conflicts with the current state of the resource."},
+		{name: "precondition failed", err: prblm.ErrPreconditionFailed, expected: 412, title: "Precondition Failed", detail: "A precondition of the request was not met."},
+		{name: "rate limited", err: prblm.ErrRateLimited, expected: 429, title: "Too Many Requests", detail: "Too many requests."},
 	}
 
 	for _, tt := range tests {
@@ -237,6 +239,8 @@ func TestSentinels_ErrorText(t *testing.T) {
 		{name: "permission denied", err: prblm.ErrPermissionDenied, text: "prblm: permission denied"},
 		{name: "not found", err: prblm.ErrNotFound, text: "prblm: not found"},
 		{name: "conflict", err: prblm.ErrConflict, text: "prblm: conflict"},
+		{name: "precondition failed", err: prblm.ErrPreconditionFailed, text: "prblm: precondition failed"},
+		{name: "rate limited", err: prblm.ErrRateLimited, text: "prblm: rate limited"},
 	}
 
 	seen := make(map[string]bool, len(tests))
