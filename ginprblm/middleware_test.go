@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/gin-gonic/gin"
@@ -322,4 +323,65 @@ func TestMiddleware_PanicPassesThrough(t *testing.T) {
 	if rec := serve(t, engine, get(t, "/x")); rec.Code != http.StatusInternalServerError {
 		t.Errorf("status = %d, want 500 from the outer recovery", rec.Code)
 	}
+}
+
+// gin-adapter / Scenario: Concurrent gin requests.
+func TestMiddleware_Concurrent(t *testing.T) {
+	t.Parallel()
+
+	const requests = 200
+
+	engine := gin.New()
+	engine.Use(ginprblm.Middleware(prblm.NewHandler(prblm.WithMappers(
+		prblm.Status(ErrVesselNotFound, http.StatusNotFound),
+	))))
+	engine.GET("/a", func(c *gin.Context) { _ = c.Error(ErrVesselNotFound) })
+	engine.GET("/b", func(c *gin.Context) { c.AbortWithStatus(http.StatusUnauthorized) })
+
+	srv := httptest.NewServer(engine)
+	t.Cleanup(srv.Close)
+
+	want := map[string]int{"/a": http.StatusNotFound, "/b": http.StatusUnauthorized}
+
+	var wg sync.WaitGroup
+
+	for i := range requests {
+		path := "/a"
+		if i%2 == 1 {
+			path = "/b"
+		}
+
+		// Each request reports with t.Errorf only: t.Fatal must not be
+		// called outside the test goroutine.
+		wg.Go(func() {
+			req := get(t, srv.URL+path)
+			req.RequestURI = ""
+
+			res, err := srv.Client().Do(req)
+			if err != nil {
+				t.Errorf("%s: request: %v", path, err)
+
+				return
+			}
+
+			defer func() { _ = res.Body.Close() }()
+
+			if res.StatusCode != want[path] {
+				t.Errorf("%s: status = %d, want %d", path, res.StatusCode, want[path])
+			}
+
+			p, err := prblm.Parse(res)
+			if err != nil {
+				t.Errorf("%s: Parse: %v", path, err)
+
+				return
+			}
+
+			if p.Status != want[path] || p.Instance != path {
+				t.Errorf("%s: problem status %d instance %q, want %d %q", path, p.Status, p.Instance, want[path], path)
+			}
+		})
+	}
+
+	wg.Wait()
 }

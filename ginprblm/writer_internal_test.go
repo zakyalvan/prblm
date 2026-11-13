@@ -1,6 +1,9 @@
 package ginprblm
 
 import (
+	"bufio"
+	"errors"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -104,5 +107,32 @@ func TestDeferredWriter_Committed(t *testing.T) {
 				t.Error("Written() = false after the body, want true")
 			}
 		})
+	}
+}
+
+// failingHijacker is a gin writer whose connection cannot be hijacked, as
+// over HTTP/2.
+type failingHijacker struct {
+	gin.ResponseWriter
+}
+
+func (failingHijacker) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	return nil, nil, http.ErrNotSupported
+}
+
+// Murphy row: a failed hijack hands nothing over, so the response stays
+// uncommitted and can still become a problem.
+func TestDeferredWriter_Hijack_Fails(t *testing.T) {
+	t.Parallel()
+
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	w := newDeferredWriter(failingHijacker{ResponseWriter: c.Writer})
+
+	if _, _, err := w.Hijack(); !errors.Is(err, http.ErrNotSupported) {
+		t.Fatalf("Hijack error = %v, want ErrNotSupported", err)
+	}
+
+	if w.isCommitted {
+		t.Error("response committed after a failed hijack, want uncommitted")
 	}
 }

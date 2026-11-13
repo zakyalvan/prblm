@@ -1,6 +1,10 @@
 package ginprblm
 
 import (
+	"bufio"
+	"net"
+	"net/http"
+
 	"github.com/gin-gonic/gin"
 )
 
@@ -14,7 +18,8 @@ const noWritten = -1
 // the problem without its status and Content-Type.
 //
 // WriteHeader and WriteHeaderNow only record the status; writing the body
-// commits the recorded status to the underlying writer.
+// or flushing commits the recorded status to the underlying writer, and a
+// hijack commits the response without sending anything.
 type deferredWriter struct {
 	gin.ResponseWriter
 
@@ -67,6 +72,26 @@ func (w *deferredWriter) WriteString(s string) (int, error) {
 	return w.ResponseWriter.WriteString(s)
 }
 
+// Flush commits the recorded status and flushes, so a streamed response
+// reaches the client as it is written.
+func (w *deferredWriter) Flush() {
+	w.commit()
+	w.ResponseWriter.Flush()
+}
+
+// Hijack hands the connection to the handler. Once it succeeds the handler
+// owns the connection, so the response counts as committed and the
+// middleware never writes to it. The recorded status is not sent: the
+// handler speaks its own protocol from here on.
+func (w *deferredWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	conn, rw, err := w.ResponseWriter.Hijack()
+	if err == nil {
+		w.isCommitted = true
+	}
+
+	return conn, rw, err
+}
+
 // Status returns the recorded status, or the underlying writer's status
 // when none was recorded or the header is committed.
 func (w *deferredWriter) Status() int {
@@ -111,4 +136,11 @@ func (w *deferredWriter) commit() {
 func (w *deferredWriter) commitNow() {
 	w.commit()
 	w.ResponseWriter.WriteHeaderNow()
+}
+
+// Unwrap returns the underlying writer, so [http.ResponseController] still
+// reaches deadlines and full duplex. The controller uses Flush and Hijack
+// of this writer first, so they still commit.
+func (w *deferredWriter) Unwrap() http.ResponseWriter {
+	return w.ResponseWriter
 }

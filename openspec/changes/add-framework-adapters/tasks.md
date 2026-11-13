@@ -66,16 +66,17 @@
 
 ## 4. Slice: gin streams and hijacked connections pass through
 
-- [ ] 4.1 Commit on first write and flush (gin-adapter / Scenario: Streaming and hijacking, SSE, flush and `WriteHeaderNow` rows); verify `go test -run TestDeferredWriter_Commit` passes against an `httptest.Server`, asserting `data: 1` arrives before the handler returns
+- [x] 4.1 Commit on first write and flush (gin-adapter / Scenario: Streaming and hijacking, SSE, flush and `WriteHeaderNow` rows); verify `go test -run TestDeferredWriter_Commit` passes against an `httptest.Server`, asserting `data: 1` arrives before the handler returns
   - RED: the three rows
   - GREEN: commit in `Write`, `WriteString`, `Flush`, `CloseNotify`, `Pusher`, and at the end of the middleware
   - REFACTOR: single `commit()` used by every path (Extract Function); /simplify
-- [ ] 4.2 Never write after a hijack (gin-adapter / Scenario: Streaming and hijacking, hijack row); verify `go test -run TestDeferredWriter_Hijack` passes with a real websocket-style upgrade over `httptest.Server`
+  - **Implementation note:** `CloseNotify` and `Pusher` were not made committing. Neither writes to the response, no spec row demands it (CLAUDE.md rule 3), and committing on `CloseNotify` would turn a later `AbortWithStatus(401)` into a bare 401 instead of a problem. Both delegate to gin unchanged.
+- [x] 4.2 Never write after a hijack (gin-adapter / Scenario: Streaming and hijacking, hijack row); verify `go test -run TestDeferredWriter_Hijack` passes with a real websocket-style upgrade over `httptest.Server`
   - RED: hijack row with hook assertion
   - GREEN: delegate `Hijack`, set `hijacked`, hook-only branch
   - REFACTOR: /simplify
-- [ ] 4.3 Isolate concurrent requests (gin-adapter / Scenario: Concurrent gin requests); verify `go test -race -run TestMiddleware_Concurrent` passes with 200 requests
-- [ ] 4.4 Verify slice 4 end to end and check `go tool cover -func` covers all commit paths; run gopls diagnostics, `-race`, vet, lint, `GOWORK=off`
+- [x] 4.3 Isolate concurrent requests (gin-adapter / Scenario: Concurrent gin requests); verify `go test -race -run TestMiddleware_Concurrent` passes with 200 requests
+- [x] 4.4 Verify slice 4 end to end and check `go tool cover -func` covers all commit paths; run gopls diagnostics, `-race`, vet, lint, `GOWORK=off`
 
 ## 5. Slice: gin Scope and Recovery
 
