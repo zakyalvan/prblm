@@ -57,6 +57,9 @@ var sentinels = []sentinel{
 	{err: ErrConflict, status: http.StatusConflict, detail: "The request conflicts with the current state of the resource."},
 	{err: ErrPreconditionFailed, status: http.StatusPreconditionFailed, detail: "A precondition of the request was not met."},
 	{err: ErrRateLimited, status: http.StatusTooManyRequests, detail: "Too many requests."},
+	{err: ErrBadGateway, status: http.StatusBadGateway, detail: "An upstream service returned an invalid response."},
+	{err: ErrUnavailable, status: http.StatusServiceUnavailable, detail: "The service is temporarily unavailable."},
+	{err: ErrUpstreamTimeout, status: http.StatusGatewayTimeout, detail: "An upstream service did not respond in time."},
 }
 
 // mapSentinel maps the first sentinel that err matches, as errors.Is reports

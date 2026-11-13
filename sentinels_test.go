@@ -67,6 +67,9 @@ func TestSentinels_Direct(t *testing.T) {
 		{name: "conflict", err: prblm.ErrConflict, expected: 409, title: "Conflict", detail: "The request conflicts with the current state of the resource."},
 		{name: "precondition failed", err: prblm.ErrPreconditionFailed, expected: 412, title: "Precondition Failed", detail: "A precondition of the request was not met."},
 		{name: "rate limited", err: prblm.ErrRateLimited, expected: 429, title: "Too Many Requests", detail: "Too many requests."},
+		{name: "bad gateway", err: prblm.ErrBadGateway, expected: 502, title: "Bad Gateway", detail: "An upstream service returned an invalid response."},
+		{name: "unavailable", err: prblm.ErrUnavailable, expected: 503, title: "Service Unavailable", detail: "The service is temporarily unavailable."},
+		{name: "upstream timeout", err: prblm.ErrUpstreamTimeout, expected: 504, title: "Gateway Timeout", detail: "An upstream service did not respond in time."},
 	}
 
 	for _, tt := range tests {
@@ -170,6 +173,12 @@ func TestSentinels_NoLeak(t *testing.T) {
 			forbidden: []string{"alice@example.com", "prblm:"},
 		},
 		{
+			name:      "dependency address",
+			err:       fmt.Errorf("%w: dial tcp 10.0.0.5:5432", prblm.ErrUnavailable),
+			expected:  503,
+			forbidden: []string{"10.0.0.5", "dial tcp"},
+		},
+		{
 			name:      "custom error fields",
 			err:       &VesselMissingError{ID: 7, Owner: "alice"},
 			expected:  404,
@@ -241,6 +250,9 @@ func TestSentinels_ErrorText(t *testing.T) {
 		{name: "conflict", err: prblm.ErrConflict, text: "prblm: conflict"},
 		{name: "precondition failed", err: prblm.ErrPreconditionFailed, text: "prblm: precondition failed"},
 		{name: "rate limited", err: prblm.ErrRateLimited, text: "prblm: rate limited"},
+		{name: "bad gateway", err: prblm.ErrBadGateway, text: "prblm: bad gateway"},
+		{name: "unavailable", err: prblm.ErrUnavailable, text: "prblm: unavailable"},
+		{name: "upstream timeout", err: prblm.ErrUpstreamTimeout, text: "prblm: upstream timeout"},
 	}
 
 	seen := make(map[string]bool, len(tests))
@@ -457,6 +469,7 @@ func TestSentinels_WithoutBuiltins(t *testing.T) {
 		expected int
 	}{
 		{name: "no mappers", err: prblm.ErrNotFound, expected: 500},
+		{name: "no mappers, unavailable", err: prblm.ErrUnavailable, expected: 500},
 		{name: "consumer mapper", mappers: []prblm.Mapper{prblm.Status(prblm.ErrNotFound, 404)}, err: prblm.ErrNotFound, expected: 404},
 	}
 
@@ -481,6 +494,9 @@ func TestSentinels_Order(t *testing.T) {
 		detail   string
 	}{
 		{name: "two sentinels", err: errors.Join(prblm.ErrConflict, prblm.ErrNotFound), expected: 404, detail: "The requested resource was not found."},
+		{name: "4xx before 5xx", err: errors.Join(prblm.ErrUnavailable, prblm.ErrInvalidInput), expected: 400, detail: "The request is invalid."},
+		{name: "upstream timeout and deadline", err: fmt.Errorf("%w: %w", prblm.ErrUpstreamTimeout, context.DeadlineExceeded), expected: 504, detail: "An upstream service did not respond in time."},
+		{name: "unavailable and deadline", err: fmt.Errorf("%w: %w", prblm.ErrUnavailable, context.DeadlineExceeded), expected: 503, detail: "The service is temporarily unavailable."},
 		{name: "sentinel and json syntax error", err: fmt.Errorf("%w: %w", prblm.ErrInvalidInput, decodeErr(`{"age":}`)), expected: 400, detail: "The request is invalid."},
 		{name: "bare deadline", err: context.DeadlineExceeded, expected: 504},
 	}

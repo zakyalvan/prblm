@@ -87,6 +87,9 @@ handler := h.Wrap(func(_ http.ResponseWriter, r *http.Request) error {
 | `ErrConflict` | 409 | `The request conflicts with the current state of the resource.` |
 | `ErrPreconditionFailed` | 412 | `A precondition of the request was not met.` |
 | `ErrRateLimited` | 429 | `Too many requests.` |
+| `ErrBadGateway` | 502 | `An upstream service returned an invalid response.` |
+| `ErrUnavailable` | 503 | `The service is temporarily unavailable.` |
+| `ErrUpstreamTimeout` | 504 | `An upstream service did not respond in time.` |
 
 Each problem is `about:blank` with the status phrase as title and the fixed detail. The wrap text,
 the error string and any wrapped cause never reach the client; the `OnError` hook receives the
@@ -104,11 +107,17 @@ error as returned.
   `ErrNotFound`.
 - `ErrPreconditionFailed` (412) is only for conditional request headers such as `If-Match`; when
   the current state of the resource forbids the operation, return `ErrConflict` (409).
-- The default 429 has no `Retry-After` header, since a sentinel carries no delay. Add it with a
-  consumer mapper for `ErrRateLimited`, or an enricher that sets it on 429 problems (see
-  `ExampleErrRateLimited`).
-- The default 401 has no `WWW-Authenticate` header, which RFC 9110 requires, because the library
-  cannot know your scheme. Add it with a consumer mapper. *(Mirrors `ExampleErrUnauthenticated`.)*
+- The dependency errors say whether a dependency answered badly (`ErrBadGateway`), is down
+  (`ErrUnavailable`) or is too slow (`ErrUpstreamTimeout`). Wrap a bare `context.DeadlineExceeded`
+  with `ErrUpstreamTimeout` to give the client the fixed detail.
+- The sentinels are your application's classification. A data layer's not-found error, such as
+  `sql.ErrNoRows`, is not one of them: map it, or wrap it with the sentinel where you decide it
+  means "not found".
+- No sentinel problem carries a header. The 429 and 503 have no `Retry-After`, since a sentinel
+  carries no delay: add it with a consumer mapper or an enricher that sets it by status (see
+  `ExampleErrRateLimited`). The 401 has no `WWW-Authenticate`, which RFC 9110 requires, because
+  the library cannot know your scheme: add it with a consumer mapper. *(Mirrors
+  `ExampleErrUnauthenticated`.)*
 
 ```go
 h := prblm.NewHandler(prblm.WithMappers(
@@ -119,9 +128,6 @@ h := prblm.NewHandler(prblm.WithMappers(
 	}),
 ))
 ```
-- The sentinels are your application's classification. A data layer's not-found error, such as
-  `sql.ErrNoRows`, is not one of them: map it, or wrap it with the sentinel where you decide it
-  means "not found".
 
 ## Mapping errors
 

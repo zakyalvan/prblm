@@ -315,11 +315,7 @@ func ExampleErrRateLimited() {
 	// The default 429 has no Retry-After header; an enricher adds one.
 	h := prblm.NewHandler(prblm.WithEnrichers(func(_ context.Context, p *prblm.Problem) {
 		if p.Status == http.StatusTooManyRequests && p.Header.Get("Retry-After") == "" {
-			if p.Header == nil {
-				p.Header = make(http.Header)
-			}
-
-			p.Header.Set("Retry-After", "30")
+			prblm.WithHeader("Retry-After", "30")(p)
 		}
 	}))
 

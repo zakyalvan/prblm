@@ -52,13 +52,8 @@ var (
 	//
 	// RFC 9110 requires a WWW-Authenticate header on a 401, and the handler
 	// cannot know the authentication scheme, so the default problem has none.
-	// Add it with a consumer mapper, which replaces the default problem:
-	//
-	//	prblm.WithMappers(prblm.Is(prblm.ErrUnauthenticated, func(error) *prblm.Problem {
-	//		return prblm.New(http.StatusUnauthorized,
-	//			prblm.WithDetail("Authentication is required."),
-	//			prblm.WithHeader("WWW-Authenticate", `Bearer realm="api"`))
-	//	}))
+	// Add it with a consumer mapper for ErrUnauthenticated, which replaces
+	// the default problem, as the example shows.
 	ErrUnauthenticated = errors.New("prblm: unauthenticated")
 
 	// ErrPermissionDenied reports that the caller is known but not allowed to
@@ -87,16 +82,26 @@ var (
 	// becomes a 429 Too Many Requests problem without a Retry-After header,
 	// since a sentinel carries no delay; a client may then retry at once. Add
 	// the header with a consumer mapper for ErrRateLimited, or with an
-	// enricher that sets it on 429 problems:
-	//
-	//	prblm.WithEnrichers(func(_ context.Context, p *prblm.Problem) {
-	//		if p.Status == http.StatusTooManyRequests && p.Header.Get("Retry-After") == "" {
-	//			if p.Header == nil {
-	//				p.Header = make(http.Header)
-	//			}
-	//
-	//			p.Header.Set("Retry-After", "30")
-	//		}
-	//	})
+	// enricher that sets it on 429 problems, as the example shows.
 	ErrRateLimited = errors.New("prblm: rate limited")
+
+	// ErrBadGateway reports that a dependency answered, but with a response
+	// the service could not use: malformed, unexpected or an error of its
+	// own. It becomes a 502 Bad Gateway problem. For a dependency that is
+	// down, use [ErrUnavailable]; for one that is too slow,
+	// [ErrUpstreamTimeout].
+	ErrBadGateway = errors.New("prblm: bad gateway")
+
+	// ErrUnavailable reports that the service cannot handle the request for
+	// now, typically because a dependency it needs is down. It becomes a 503
+	// Service Unavailable problem without a Retry-After header, since a
+	// sentinel carries no delay; add one as for [ErrRateLimited].
+	ErrUnavailable = errors.New("prblm: unavailable")
+
+	// ErrUpstreamTimeout reports that a dependency did not respond in time.
+	// It becomes a 504 Gateway Timeout problem. A bare
+	// [context.DeadlineExceeded] already becomes a 504 without detail; wrap
+	// it with ErrUpstreamTimeout to say that the deadline was a dependency's
+	// and give the client the fixed detail.
+	ErrUpstreamTimeout = errors.New("prblm: upstream timeout")
 )

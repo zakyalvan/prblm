@@ -86,24 +86,24 @@
 
 ## 4. Slice: dependency errors (503, 504, then 502)
 
-- [ ] 4.1 Map `ErrUnavailable` and `ErrUpstreamTimeout` (error-sentinels / Scenario: Sentinel returned directly, Scenario: Error text, their rows); verify `go test -race -run 'TestSentinels_(Direct|ErrorText)'` passes
+- [x] 4.1 Map `ErrUnavailable` and `ErrUpstreamTimeout` (error-sentinels / Scenario: Sentinel returned directly, Scenario: Error text, their rows); verify `go test -race -run 'TestSentinels_(Direct|ErrorText)'` passes
   - RED: the two rows in both tables
   - GREEN: the two variables and table rows
   - REFACTOR: /simplify
-- [ ] 4.2 Keep dependency details private (error-sentinels / Scenario: Context added by the application stays private, `ErrUnavailable` row) and disable them with the built-ins (Scenario: Built-ins disabled, `ErrUnavailable` row); verify `go test -race -run 'TestSentinels_(NoLeak|WithoutBuiltins)'` passes
+- [x] 4.2 Keep dependency details private (error-sentinels / Scenario: Context added by the application stays private, `ErrUnavailable` row) and disable them with the built-ins (Scenario: Built-ins disabled, `ErrUnavailable` row); verify `go test -race -run 'TestSentinels_(NoLeak|WithoutBuiltins)'` passes
   - RED: the new rows; the body must contain neither the address nor `dial tcp`
   - GREEN: nothing expected
   - REFACTOR: /simplify
-- [ ] 4.3 Prefer the sentinel over `context.DeadlineExceeded` and order 4xx before 5xx (error-sentinels / Scenario: Several matches in one chain, the remaining rows); verify `go test -race -run TestSentinels_Order` passes
+- [x] 4.3 Prefer the sentinel over `context.DeadlineExceeded` and order 4xx before 5xx (error-sentinels / Scenario: Several matches in one chain, the remaining rows); verify `go test -race -run TestSentinels_Order` passes
   - RED: the `ErrUpstreamTimeout` and `ErrUnavailable` rows wrapping `context.DeadlineExceeded`, and the `ErrUnavailable`/`ErrInvalidInput` join row
   - GREEN: confirm the order
   - REFACTOR: /simplify
-- [ ] 4.4 Map `ErrBadGateway` (error-sentinels / Scenario: Sentinel returned directly, Scenario: Error text, `ErrBadGateway` rows); verify `go test -race -run 'TestSentinels_(Direct|ErrorText)'` passes
+- [x] 4.4 Map `ErrBadGateway` (error-sentinels / Scenario: Sentinel returned directly, Scenario: Error text, `ErrBadGateway` rows); verify `go test -race -run 'TestSentinels_(Direct|ErrorText)'` passes
   - RED: the two rows
   - GREEN: the variable and table row
   - REFACTOR: /simplify
-- [ ] 4.5 Document the three sentinels (a dependency is down, slow, or answered badly; no `Retry-After` on 503; `ErrUpstreamTimeout` versus a bare `context.DeadlineExceeded`), complete the README catalog table and the CHANGELOG entry; verify `go test -run Example` passes
-- [ ] 4.6 Verify the full catalog end to end (every sentinel through net/http in JSON and XML) and check `go tool cover -func` covers `mapSentinel` and the `builtins` order; run `gofmt`, `go vet`, `golangci-lint run ./...`, `go test -race ./...` and `GOWORK=off go test ./...` in the root module, `go test -race ./...` in `ginprblm`, `fiberprblm` and `internal/paritytest`; run gopls `go_diagnostics` on changed files
+- [x] 4.5 Document the three sentinels (a dependency is down, slow, or answered badly; no `Retry-After` on 503; `ErrUpstreamTimeout` versus a bare `context.DeadlineExceeded`), complete the README catalog table and the CHANGELOG entry; verify `go test -run Example` passes
+- [x] 4.6 Verify the full catalog end to end (every sentinel through net/http in JSON and XML) and check `go tool cover -func` covers `mapSentinel` and the `builtins` order; run `gofmt`, `go vet`, `golangci-lint run ./...`, `go test -race ./...` and `GOWORK=off go test ./...` in the root module, `go test -race ./...` in `ginprblm`, `fiberprblm` and `internal/paritytest`; run gopls `go_diagnostics` on changed files
 
 ## Workflow follow-up
 
