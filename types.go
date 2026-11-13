@@ -35,16 +35,28 @@ type Type struct {
 // value. Definitions are meant for package-level variables, so a mistake
 // surfaces as soon as the program starts.
 func DefineType(subtype string, status int, title, description string) *Type {
-	switch {
-	case !isSubtype(subtype):
-		panic(fmt.Sprintf("prblm: DefineType: invalid sub-type: %q", subtype))
-	case !isErrorStatus(status):
-		panic(fmt.Sprintf("prblm: DefineType: invalid status: %d, want 400-599", status))
-	case strings.TrimSpace(title) == "":
-		panic(fmt.Sprintf("prblm: DefineType: blank title: %q", title))
+	if err := validateType(subtype, status, title); err != nil {
+		panic("prblm: DefineType: " + err.Error())
 	}
 
 	return &Type{subtype: subtype, status: status, title: title, description: description}
+}
+
+// validateType checks the parts of a definition and returns an error naming
+// the first invalid one: the sub-type, the status (400–599) or a blank
+// title. It is shared by DefineType and WithTypes, which re-checks every
+// registered definition, because a Type can be built without DefineType.
+func validateType(subtype string, status int, title string) error {
+	switch {
+	case !isSubtype(subtype):
+		return fmt.Errorf("invalid sub-type: %q", subtype)
+	case !isErrorStatus(status):
+		return fmt.Errorf("invalid status: %d, want 400-599", status)
+	case strings.TrimSpace(title) == "":
+		return fmt.Errorf("blank title: %q", title)
+	}
+
+	return nil
 }
 
 // New returns a new problem of type t: its sub-type as the type, its status
@@ -52,9 +64,10 @@ func DefineType(subtype string, status int, title, description string) *Type {
 // handler with a namespace resolves the sub-type when it answers the
 // problem. Each call returns a fresh problem, which the caller may modify.
 //
-// On a nil Type, for example a definition that was never assigned, New
-// returns the safe 500 problem instead of panicking, and ignores fields, so
-// a detail meant for the defined type never reaches the client.
+// On a nil Type, for example a definition that was never assigned, or on a
+// zero-value &Type{} that skipped DefineType, New returns the safe 500
+// problem instead of panicking, and ignores fields, so a detail meant for
+// the defined type never reaches the client.
 //
 // Use it in a mapper:
 //
@@ -62,7 +75,9 @@ func DefineType(subtype string, status int, title, description string) *Type {
 //		return BlacklistedSupplier.New(prblm.WithDetail("Supplier 42 is blacklisted."))
 //	})
 func (t *Type) New(fields ...Field) *Problem {
-	if t == nil {
+	// DefineType never accepts an empty sub-type, so one marks a Type that
+	// was not defined.
+	if t == nil || t.subtype == "" {
 		return fallbackProblem()
 	}
 
@@ -72,25 +87,52 @@ func (t *Type) New(fields ...Field) *Problem {
 	return p
 }
 
-// Subtype returns the sub-type of t.
-func (t *Type) Subtype() string { return t.subtype }
+// Subtype returns the sub-type of t, or "" for a nil Type.
+func (t *Type) Subtype() string {
+	if t == nil {
+		return ""
+	}
 
-// Status returns the HTTP status of the problems of t.
-func (t *Type) Status() int { return t.status }
+	return t.subtype
+}
 
-// Title returns the title of the problems of t.
-func (t *Type) Title() string { return t.title }
+// Status returns the HTTP status of the problems of t, or 0 for a nil Type.
+func (t *Type) Status() int {
+	if t == nil {
+		return 0
+	}
 
-// Description returns the description of t, for its documentation.
-func (t *Type) Description() string { return t.description }
+	return t.status
+}
+
+// Title returns the title of the problems of t, or "" for a nil Type.
+func (t *Type) Title() string {
+	if t == nil {
+		return ""
+	}
+
+	return t.title
+}
+
+// Description returns the description of t, for its documentation, or ""
+// for a nil Type.
+func (t *Type) Description() string {
+	if t == nil {
+		return ""
+	}
+
+	return t.description
+}
 
 // WithTypes registers type definitions with the handler. It may be used
 // several times; nil definitions are skipped.
 //
 // Registered types need a namespace, set with [WithNamespace] in any order.
 // [NewHandler] panics when a sub-type is registered twice, including the
-// same definition twice, or when types are registered without a namespace.
-// WithTypes with no definitions registers nothing and needs no namespace.
+// same definition twice, when types are registered without a namespace, or
+// when a definition is one [DefineType] would reject, such as a zero-value
+// &Type{}, so a broken definition is never documented. WithTypes with no
+// definitions registers nothing and needs no namespace.
 func WithTypes(types ...*Type) Option {
 	return func(h *Handler) {
 		for _, t := range types {

@@ -58,8 +58,12 @@
 // [ErrorHandler] serves their documentation for GET and HEAD requests under
 // the namespace path that reach it as fiber's route-not-found error, exactly
 // as the core's [prblm.Handler.Discovery]. A route registered at such a path
-// takes precedence, and a handler that returns fiber.ErrNotFound gets a 404
-// problem as usual.
+// takes precedence, a handler that returns fiber.ErrNotFound gets a 404
+// problem as usual, and a route for another method gets fiber's 405 as a
+// problem. The error handler never sees a request a route answers; add the
+// opt-in [Discovery] middleware with the same options to have the OnError
+// hook told, with a note wrapping [prblm.ErrShadowedDocumentation], when a
+// route hides documentation.
 //
 // # Safe defaults
 //

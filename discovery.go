@@ -5,12 +5,14 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"html/template"
 	"maps"
 	"net/http"
-	"net/url"
 	"strings"
+	"sync"
+	"sync/atomic"
 
 	"github.com/kartaladev/prblm/internal/negotiate"
 )
@@ -75,6 +77,15 @@ const pageStyle = "body{font-family:system-ui,sans-serif;line-height:1.5;margin:
 	"code{font-family:ui-monospace,monospace;overflow-wrap:anywhere}.description{white-space:pre-line}" +
 	"@media (prefers-color-scheme:dark){body{color:#e6edf3;background:#0d1117}}"
 
+// ErrShadowedDocumentation is wrapped by the note the [OnError] hook
+// receives when an application route answers a GET or HEAD request for
+// which discovery would have served a documentation page or the index (see
+// [Handler.NoteShadowedRoute]). Such a page cannot be reached, and the
+// library never logs, so the note makes the conflict visible. It names the
+// route and the path, and comes with a nil problem, because the request
+// succeeded.
+var ErrShadowedDocumentation = errors.New("prblm: an application route hides type documentation")
+
 // WithoutDiscovery keeps the type definitions registered with [WithTypes]
 // but serves no documentation for them: [Handler.DiscoveryPath] is empty and
 // [Handler.Discovery] answers every request with a 404 problem. Discovery
@@ -86,16 +97,94 @@ func WithoutDiscovery() Option {
 	}
 }
 
-// discovery holds the documentation of the registered types, rendered once
-// when the handler is created and never changed, so serving it is safe for
-// concurrent use.
+// DiscoveryRequest describes a request for [Handler.RespondDiscovery],
+// independently of any web framework.
+type DiscoveryRequest struct {
+	// Method is the HTTP method.
+	Method string
+	// Path is the URL path as the client sent it, still escaped:
+	// r.URL.EscapedPath() in net/http and gin, the raw request path in
+	// fiber. Without the query string.
+	Path string
+	// Accept is the value of the Accept header, repeated lines joined with
+	// ",".
+	Accept string
+	// IfNoneMatch is the value of the If-None-Match header, repeated lines
+	// joined with ",".
+	IfNoneMatch string
+}
+
+// discovery serves the documentation of the registered types. Its pages
+// are rendered once, on first use, and never changed, so serving them is
+// safe for concurrent use.
 type discovery struct {
+	// site returns the rendered pages, rendering them on its first call.
+	site func() site
+	// path is the path of the namespace, without a trailing slash, and
+	// prefix is path followed by "/", built once.
+	path, prefix string
+	// renders counts how many times the pages were rendered: 0 until
+	// discovery is first used, 1 after.
+	renders atomic.Int32
+	// documented are the registered sub-types, known without rendering, so
+	// noting a hidden page renders nothing.
+	documented map[string]string
+	// noted are the routes already reported as hiding documentation.
+	noted notedRoutes
+}
+
+// maxNotedRoutes caps the routes remembered as hiding documentation. Route
+// patterns come from code, so a real application stays far below it; the
+// cap only bounds the memory a misbehaving adapter could take.
+const maxNotedRoutes = 256
+
+// notedRoutes is the set of routes already noted as hiding documentation,
+// so each is noted once. It is safe for concurrent use.
+type notedRoutes struct {
+	routes map[string]struct{}
+	mu     sync.Mutex
+}
+
+// add adds route and reports whether it was new. Once the set holds
+// maxNotedRoutes routes, it adds nothing and reports false.
+func (n *notedRoutes) add(route string) bool {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+
+	if _, ok := n.routes[route]; ok || len(n.routes) >= maxNotedRoutes {
+		return false
+	}
+
+	if n.routes == nil {
+		n.routes = make(map[string]struct{})
+	}
+
+	n.routes[route] = struct{}{}
+
+	return true
+}
+
+// site is the rendered documentation: the pages of each type and the index.
+type site struct {
 	// docs are the pages of each type, by sub-type.
 	docs map[string]pages
 	// index is the index of every type.
 	index pages
-	// path is the path of the namespace, without a trailing slash.
-	path string
+}
+
+// newLazyDiscovery returns the discovery served under path, whose pages
+// render returns on first use. When render panics, as for a page that
+// cannot be rendered, every later use panics with the same value, so the
+// failure is never mistaken for missing pages.
+func newLazyDiscovery(path string, render func() site) *discovery {
+	d := &discovery{path: path, prefix: path + "/"}
+	d.site = sync.OnceValue(func() site {
+		d.renders.Add(1)
+
+		return render()
+	})
+
+	return d
 }
 
 // pageCacheControl lets browsers and shared caches keep a page for an hour.
@@ -229,36 +318,49 @@ type typeDoc struct {
 	Description string `json:"description"`
 }
 
-// lookup returns the pages served at u: the index at the namespace path,
-// with or without a trailing slash, or the documentation of the type whose
-// sub-type is the rest of the path, matched exactly. A path with encoded
-// characters ("%2F", "%2D") matches nothing, so every page has exactly one
-// URL; the exact match also leaves no room for "..".
-func (d *discovery) lookup(u *url.URL) (pages, bool) {
-	path := u.Path
-	if u.EscapedPath() != path {
-		return pages{}, false
+// isUnder reports whether the escaped path is for discovery: the
+// discovery path, or that path followed by "/" and anything.
+func (d *discovery) isUnder(path string) bool {
+	return path == d.path || strings.HasPrefix(path, d.prefix)
+}
+
+// lookup returns the pages served at the escaped path, which isUnder has
+// accepted: the index at the namespace path, with or without a trailing
+// slash, or the documentation of the type whose sub-type is the rest of the
+// path, matched exactly. A sub-type never needs escaping, so a path with an
+// escape ("%2F", "%2D", "%zz") matches nothing and every page has exactly
+// one URL; the exact match also leaves no room for "..".
+func (d *discovery) lookup(path string) (pages, bool) {
+	rendered := d.site()
+
+	subtype := d.subtypeAt(path)
+	if subtype == "" {
+		return rendered.index, true
 	}
 
-	if path == d.path || path == d.path+"/" {
-		return d.index, true
-	}
-
-	subtype, ok := strings.CutPrefix(path, d.path+"/")
-	if !ok {
-		return pages{}, false
-	}
-
-	doc, ok := d.docs[subtype]
+	doc, ok := rendered.docs[subtype]
 
 	return doc, ok
 }
 
-// documents reports whether d serves documentation for subtype.
-func (d *discovery) documents(subtype string) bool {
-	_, ok := d.docs[subtype]
+// hasPage reports whether lookup finds a page at the escaped path, which
+// isUnder has accepted, without rendering anything.
+func (d *discovery) hasPage(path string) bool {
+	subtype := d.subtypeAt(path)
+	_, ok := d.documented[subtype]
 
-	return ok
+	return subtype == "" || ok
+}
+
+// subtypeAt returns the sub-type named by the escaped path, which isUnder
+// has accepted, or "" for the index: the namespace path, with or without a
+// trailing slash.
+func (d *discovery) subtypeAt(path string) string {
+	if path == d.path {
+		return ""
+	}
+
+	return strings.TrimPrefix(path, d.prefix)
 }
 
 // namespacePath returns the path of a checked namespace: the namespace
@@ -300,14 +402,4 @@ func htmlPage(name string, tmpl *template.Template, data any) page {
 	return newPage(mediaTypeHTML+"; charset=utf-8", buf.Bytes(), http.Header{
 		"Content-Security-Policy": {"default-src 'none'; style-src 'unsafe-inline'"},
 	})
-}
-
-// writeDiscovery writes res as the answer to r. A HEAD request gets the
-// same headers and no body, whatever writer serves it.
-func writeDiscovery(w http.ResponseWriter, r *http.Request, res Response) {
-	if r.Method == http.MethodHead {
-		res.Body = nil
-	}
-
-	track(w).send(res)
 }

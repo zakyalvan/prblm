@@ -66,3 +66,54 @@ func TestFiberNotFound_Distinguishable(t *testing.T) {
 		})
 	}
 }
+
+// Design D6 also rests on an app.Use middleware seeing, once c.Next()
+// returns, the endpoint route that answered the request: c.Matched() is
+// true and c.Route().Path is the route's pattern, for GET and for the HEAD
+// fiber registers with it, and c.Matched() is false for an unmatched path.
+// Proven here before fiberprblm.Discovery builds on it (CLAUDE.md rule 8).
+func TestFiberMiddleware_SeesRoute(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		method    string
+		path      string
+		isMatched bool
+		route     string
+	}{
+		{name: "matched get", method: http.MethodGet, path: "/v1/api/probs/out-of-credit", isMatched: true, route: "/v1/api/probs/:name"},
+		{name: "matched head", method: http.MethodHead, path: "/v1/api/probs/out-of-credit", isMatched: true, route: "/v1/api/probs/:name"},
+		{name: "unmatched path", method: http.MethodGet, path: "/v1/other/out-of-credit"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			var (
+				isMatched bool
+				route     string
+			)
+
+			app := fiber.New()
+			app.Use(func(c fiber.Ctx) error {
+				err := c.Next()
+
+				isMatched = c.Matched()
+				if isMatched {
+					route = c.Route().Path
+				}
+
+				return err
+			})
+			app.Get("/v1/api/probs/:name", func(c fiber.Ctx) error { return c.SendString("custom") })
+
+			test(t, app, get(t, tt.method, tt.path))
+
+			if isMatched != tt.isMatched || route != tt.route {
+				t.Errorf("after c.Next(): Matched() = %v, Route().Path = %q; want %v, %q", isMatched, route, tt.isMatched, tt.route)
+			}
+		})
+	}
+}

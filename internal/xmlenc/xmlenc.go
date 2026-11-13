@@ -31,22 +31,34 @@ var ErrInvalidName = errors.New("xmlenc: invalid element name")
 // On error, e may hold part of the element, so the caller must discard what
 // was written.
 func Encode(e *xml.Encoder, name string, value any) error {
+	var tree any
+
 	b, err := json.Marshal(value)
+	if err == nil {
+		// json.Marshal produced b and validated it, so decoding cannot fail;
+		// decodeTree still reports it, should that ever change.
+		tree, err = decodeTree(b)
+	}
+
 	if err != nil {
 		return err
 	}
 
+	return walk(e, name, tree)
+}
+
+// decodeTree decodes the JSON document b into maps, slices and scalars,
+// keeping numbers as json.Number so they are written exactly as encoded.
+func decodeTree(b []byte) (any, error) {
 	dec := json.NewDecoder(bytes.NewReader(b))
 	dec.UseNumber()
 
-	// json.Marshal produced b and validated it, so decoding cannot fail; the
-	// check guards against that ever changing.
 	var tree any
 	if err := dec.Decode(&tree); err != nil {
-		return err
+		return nil, err
 	}
 
-	return walk(e, name, tree)
+	return tree, nil
 }
 
 // walk writes the decoded JSON value v as the element name.

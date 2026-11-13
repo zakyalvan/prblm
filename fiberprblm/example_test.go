@@ -131,3 +131,43 @@ func ExampleErrorHandler_discovery() {
 	// 200 application/json
 	// {"type":"/v1/api/probs/out-of-credit","subtype":"out-of-credit","status":403,"title":"Out of credit","description":"The account balance is below the price of the request."}
 }
+
+func ExampleDiscovery() {
+	outOfCredit := prblm.DefineType("out-of-credit", http.StatusForbidden, "Out of credit", "")
+	logProblem := func(_ context.Context, err error, _ *prblm.Problem) {
+		if errors.Is(err, prblm.ErrShadowedDocumentation) {
+			fmt.Println("hook:", err)
+		}
+	}
+
+	opts := []prblm.Option{
+		prblm.WithNamespace("/v1/api/probs"),
+		prblm.WithTypes(outOfCredit),
+		prblm.OnError(logProblem),
+	}
+
+	app := fiber.New(fiber.Config{ErrorHandler: fiberprblm.ErrorHandler(opts...)})
+	app.Use(fiberprblm.Discovery(opts...))
+	// This route hides the documentation of out-of-credit.
+	app.Get("/v1/api/probs/:name", func(c fiber.Ctx) error { return c.SendString("custom") })
+
+	for range 2 {
+		req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/v1/api/probs/out-of-credit", http.NoBody)
+
+		res, err := app.Test(req)
+		if err != nil {
+			fmt.Println(err)
+
+			return
+		}
+
+		body, _ := io.ReadAll(res.Body)
+		_ = res.Body.Close()
+
+		fmt.Println(res.StatusCode, string(body))
+	}
+	// Output:
+	// hook: prblm: an application route hides type documentation: route "/v1/api/probs/:name" hides "/v1/api/probs/out-of-credit"
+	// 200 custom
+	// 200 custom
+}

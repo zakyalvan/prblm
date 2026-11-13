@@ -62,8 +62,12 @@
 //
 // When the options register problem types with [prblm.WithTypes],
 // [Middleware] serves their documentation for GET and HEAD requests under
-// the namespace path that no route claims, exactly as the core's
-// [prblm.Handler.Discovery]. Install it with engine.Use, so it also runs for
+// the namespace path that no route claims for any method, exactly as the
+// core's [prblm.Handler.Discovery]. With engine.HandleMethodNotAllowed on, a
+// path that has a route only for another method keeps gin's 405. A route at
+// a documentation path wins, and the OnError hook receives a note wrapping
+// [prblm.ErrShadowedDocumentation] for it, once. Install Middleware with
+// engine.Use, before middleware that sets a status, so it also runs for
 // unmatched paths:
 //
 //	engine.Use(ginprblm.Middleware(

@@ -3,80 +3,86 @@ package fiberprblm
 import (
 	"bytes"
 	"errors"
-	"net/http"
-	"strings"
 
 	"github.com/gofiber/fiber/v3"
 	"github.com/kartaladev/prblm"
 )
 
-// isDiscovery reports whether c, answered with err, is a request for type
-// documentation: a GET or HEAD that reached fiber's route-not-found error,
-// for the discovery path or a path under it. It is false when discovery is
-// off (an empty path).
+// Discovery returns fiber middleware, for app.Use, that reports every
+// request an endpoint route answers to [prblm.Handler.NoteShadowedRoute],
+// so the [prblm.OnError] hook learns when a route hides type
+// documentation: such a page cannot be reached, because [ErrorHandler]
+// only serves documentation for paths no route claims, and it never sees a
+// request a route answers. The note wraps [prblm.ErrShadowedDocumentation]
+// and names the route's pattern (c.Route().Path), once per route.
 //
-// fiber's router returns the sentinel fiber.ErrNotFound itself, the same
-// value a handler may return, so the error alone cannot tell them apart;
-// c.Matched() can, because it is set only when an endpoint route matched.
-func isDiscovery(c fiber.Ctx, err error, path string) bool {
-	if path == "" || c.Matched() || !errors.Is(err, fiber.ErrNotFound) {
+// opts are the options of [prblm.NewHandler]; pass the error handler's
+// options, so the middleware knows the same types and reports to the same
+// hook. An invalid option panics at startup. With discovery off, nothing is
+// reported. The middleware never renders the documentation, so it adds no
+// second copy of the pages [ErrorHandler] serves.
+//
+// Discovery is opt-in, since only the hook learns anything from it. It
+// changes no response and returns the error of the handlers after it
+// unchanged, so serving documentation stays with [ErrorHandler]. A panic
+// below it is left to [Recovery], and that request is not reported; the
+// route is noted at the next request it answers.
+func Discovery(opts ...prblm.Option) fiber.Handler {
+	h := prblm.NewHandler(opts...)
+
+	return func(c fiber.Ctx) error {
+		err := c.Next()
+
+		// Set only when an endpoint route, not app.Use middleware, matched,
+		// and c.Route() is then that route.
+		if c.Matched() {
+			h.NoteShadowedRoute(c.Context(), c.Route().Path, prblm.DiscoveryRequest{
+				Method: c.Method(),
+				Path:   escapedPath(c),
+			})
+		}
+
+		return err
+	}
+}
+
+// escapedPath returns the path of the request c answers as the client sent
+// it, still escaped and without the query string, copied out of fiber's
+// buffers.
+func escapedPath(c fiber.Ctx) string {
+	return string(c.Request().URI().PathOriginal())
+}
+
+// isRouteNotFound reports whether err, answering c, is fiber's own
+// route-not-found error. fiber's router returns the sentinel
+// fiber.ErrNotFound itself, the same value a handler may return, so the
+// error alone cannot tell them apart; c.Matched() can, because it is set
+// only when an endpoint route matched. A path that has a route only for
+// another method gets fiber.ErrMethodNotAllowed instead, so it is not one.
+func isRouteNotFound(c fiber.Ctx, err error) bool {
+	return !c.Matched() && errors.Is(err, fiber.ErrNotFound)
+}
+
+// serveDiscovery answers c with the core's discovery response, exactly as
+// net/http would. It reports false, and does nothing, when the request is
+// not for discovery. The path is the raw request path, still escaped, so a
+// malformed escape such as "%zz" needs no special case: under the discovery
+// path it names no type, and gets the discovery 404.
+func serveDiscovery(h *prblm.Handler, c fiber.Ctx) bool {
+	header := &c.Request().Header
+
+	res, ok := h.RespondDiscovery(c.Context(), prblm.DiscoveryRequest{
+		Method: c.Method(),
+		Path:   escapedPath(c),
+		Accept: requestOf(c).Accept,
+		// Repeated lines form one list (RFC 9110, section 5.3).
+		IfNoneMatch: string(bytes.Join(header.PeekAll(fiber.HeaderIfNoneMatch), []byte(","))),
+	})
+	if !ok {
 		return false
 	}
 
-	method, urlPath := c.Method(), c.Path()
-	isRead := method == http.MethodGet || method == http.MethodHead
+	send(c, res)
 
-	return isRead && (urlPath == path || strings.HasPrefix(urlPath, path+"/"))
-}
-
-// serveDiscovery answers c with the core discovery handler, exactly as
-// net/http would. fiber has no http.ResponseWriter, so the handler writes
-// into a recorder, which is then sent like a problem response. Every
-// request header is passed on, and the URL is the original one, so the
-// core sees the request as net/http would.
-func serveDiscovery(c fiber.Ctx, discovery http.Handler) error {
-	req, err := http.NewRequestWithContext(c.Context(), c.Method(), c.OriginalURL(), http.NoBody)
-	if err != nil {
-		// fiber accepts URIs net/http rejects, such as a malformed escape
-		// ("%zz"). No documentation lives there, so the caller answers the
-		// route-not-found error as usual.
-		return err
-	}
-
-	for name, value := range c.Request().Header.All() {
-		req.Header.Add(string(name), string(value))
-	}
-
-	rec := recorder{header: make(http.Header)}
-	discovery.ServeHTTP(&rec, req)
-
-	send(c, prblm.Response{Status: rec.status, Header: rec.header, Body: rec.body.Bytes()})
-
-	return nil
-}
-
-// recorder is the minimal [http.ResponseWriter] the discovery handler
-// writes into: it records the status, headers and body. Discovery pages are
-// small and pre-rendered, so the body fits in memory.
-type recorder struct {
-	header http.Header
-	body   bytes.Buffer
-	status int
-}
-
-// Header returns the recorded headers.
-func (r *recorder) Header() http.Header { return r.header }
-
-// WriteHeader records the first status.
-func (r *recorder) WriteHeader(status int) {
-	if r.status == 0 {
-		r.status = status
-	}
-}
-
-// Write records b, after the implicit 200 when no status was written.
-func (r *recorder) Write(b []byte) (int, error) {
-	r.WriteHeader(http.StatusOK)
-
-	return r.body.Write(b)
+	return true
 }

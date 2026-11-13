@@ -1,6 +1,7 @@
 package prblm
 
 import (
+	"context"
 	"fmt"
 	"html/template"
 	"strings"
@@ -94,5 +95,122 @@ func TestNamespacePath(t *testing.T) {
 				t.Errorf("namespacePath(%q) = %q, want %q", ns, got, want)
 			}
 		})
+	}
+}
+
+// type-discovery / Scenario: Pages rendered on first use (design D1, D4):
+// a handler that only answers errors and panics, as the one gin's Recovery
+// builds, never renders the documentation, and the first use of discovery
+// renders it once, whichever method uses it first.
+func TestDiscovery_RenderedOnFirstUse(t *testing.T) {
+	t.Parallel()
+
+	uses := map[string]func(h *Handler){
+		"DiscoveryPath": func(h *Handler) { h.DiscoveryPath() },
+		"Discovery":     func(h *Handler) { h.Discovery() },
+		"RespondDiscovery": func(h *Handler) {
+			h.RespondDiscovery(t.Context(), DiscoveryRequest{Method: "GET", Path: "/v1/api/probs"})
+		},
+	}
+
+	for first, use := range uses {
+		t.Run(first, func(t *testing.T) {
+			t.Parallel()
+
+			h := NewHandler(WithNamespace("/v1/api/probs"), WithTypes(DefineType("out-of-credit", 403, "Out of credit", "")))
+
+			// What gin's Recovery does with its handler: answer errors and
+			// panics, nothing else.
+			req := Request{Method: "GET", Path: "/v1/vessels/7"}
+			h.Respond(t.Context(), req, &PanicError{Value: "boom"})
+			h.respondPanic(t.Context(), req, &PanicError{Value: "boom"})
+
+			if n := h.discovery.renders.Load(); n != 0 {
+				t.Fatalf("rendered %d times before any use of discovery, want 0", n)
+			}
+
+			use(h)
+
+			for _, again := range uses {
+				again(h)
+			}
+
+			if n := h.discovery.renders.Load(); n != 1 {
+				t.Errorf("rendered %d times after using discovery, want 1", n)
+			}
+		})
+	}
+}
+
+// Design D4 failure mode: when rendering fails on first use, every later
+// use fails the same way, naming the resource, rather than finding no
+// pages inside a request.
+func TestDiscovery_RenderFailureRepeats(t *testing.T) {
+	t.Parallel()
+
+	d := newLazyDiscovery("/v1/api/probs", func() site { panic(`prblm: rendering the documentation of "x": boom`) })
+
+	for i := range 2 {
+		msg := func() (msg string) {
+			defer func() { msg = fmt.Sprint(recover()) }()
+
+			d.site()
+
+			return ""
+		}()
+
+		if !strings.Contains(msg, `"x": boom`) {
+			t.Errorf("use %d: panic = %q, want the rendering failure", i+1, msg)
+		}
+	}
+
+	if n := d.renders.Load(); n != 1 {
+		t.Errorf("rendered %d times, want 1", n)
+	}
+}
+
+// Murphy row for type-discovery / Scenario: Shadowed documentation: without
+// a hook, a conflicting route builds no note and is not remembered, so the
+// request a route answers pays nothing for it.
+//
+//nolint:paralleltest // AllocsPerRun counts allocations process-wide; parallel tests would skew it.
+func TestNoteShadowedRoute_NoHook(t *testing.T) {
+	h := NewHandler(WithNamespace("/v1/api/probs"), WithTypes(DefineType("out-of-credit", 403, "Out of credit", "")))
+	req := DiscoveryRequest{Method: "GET", Path: "/v1/api/probs/out-of-credit"}
+
+	h.DiscoveryPath() // render, as every adapter does at construction
+
+	allocs := testing.AllocsPerRun(100, func() {
+		h.NoteShadowedRoute(t.Context(), "/v1/api/probs/out-of-credit", req)
+	})
+
+	if allocs != 0 {
+		t.Errorf("allocations = %v, want 0", allocs)
+	}
+
+	if n := len(h.discovery.noted.routes); n != 0 {
+		t.Errorf("remembered %d routes, want none", n)
+	}
+}
+
+// Design D4: noting a route that hides documentation reads the sub-types
+// registered in NewHandler, never the rendered pages, so an adapter that
+// only notes, such as fiber's Discovery middleware, renders nothing.
+func TestNoteShadowedRoute_DoesNotRender(t *testing.T) {
+	t.Parallel()
+
+	notes := 0
+	h := NewHandler(
+		WithNamespace("/v1/api/probs"),
+		WithTypes(DefineType("out-of-credit", 403, "Out of credit", "")),
+		OnError(func(context.Context, error, *Problem) { notes++ }),
+	)
+
+	for _, path := range []string{"/v1/api/probs/out-of-credit", "/v1/api/probs", "/v1/api/probs/", "/v1/api/probs/unknown"} {
+		h.NoteShadowedRoute(t.Context(), path, DiscoveryRequest{Method: "GET", Path: path})
+	}
+
+	if n := h.discovery.renders.Load(); n != 0 || notes != 3 {
+		t.Errorf("rendered %d times with %d notes, want 0 renders and 3 notes (page, index, index with slash)", n, notes)
 	}
 }

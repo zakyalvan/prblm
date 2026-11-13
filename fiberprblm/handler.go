@@ -29,15 +29,16 @@ import (
 // does, for GET and HEAD requests under the namespace path that reach it as
 // fiber's route-not-found error. A route registered at a documentation path
 // takes precedence, and a handler that returns fiber.ErrNotFound gets a 404
-// problem as usual.
+// problem as usual. A path that has a route only for another method gets
+// fiber's 405 as a problem, not the documentation.
 func ErrorHandler(opts ...prblm.Option) fiber.ErrorHandler {
 	h := prblm.NewHandler(opts...)
-	discovery, discoveryPath := h.Discovery(), h.DiscoveryPath()
+	// DiscoveryPath renders the documentation now, so a rendering failure
+	// shows at startup.
+	isDiscoveryOn := h.DiscoveryPath() != ""
 
 	return func(c fiber.Ctx, err error) error {
-		// A request URI net/http cannot parse holds no documentation, so it
-		// falls through and the route-not-found error is answered as usual.
-		if isDiscovery(c, err, discoveryPath) && serveDiscovery(c, discovery) == nil {
+		if isDiscoveryOn && isRouteNotFound(c, err) && serveDiscovery(h, c) {
 			return nil
 		}
 

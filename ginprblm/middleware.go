@@ -37,21 +37,34 @@ import (
 //
 // Register Middleware before middleware that aborts or writes: a header sent
 // before it runs cannot be replaced, so the error then only reaches the hook.
+// With problem types registered, also register it before middleware that
+// sets a status (c.Status): that replaces the 404 gin records for a path no
+// route claims, and discovery is then not served.
 //
 // When opts register problem types (see [prblm.WithTypes]), Middleware also
 // serves their documentation, exactly as [prblm.Handler.Discovery] does,
-// for GET and HEAD requests under the namespace path that no route claims.
-// It must then be installed with engine.Use: gin runs global middleware for
-// unmatched paths, even with a NoRoute handler, but not group middleware. A
-// route registered at a documentation path takes precedence.
+// for GET and HEAD requests under the namespace path that no route claims
+// for any method. It must then be installed with engine.Use: gin runs global
+// middleware for unmatched paths, even with a NoRoute handler, but not group
+// middleware. A route registered at a documentation path takes precedence,
+// and so does a route for another method when engine.HandleMethodNotAllowed
+// is on: the client gets gin's 405. gin routes HEAD on its own, so with
+// only a GET route at a documentation path, a HEAD there finds no route and
+// gets the documentation's headers.
+//
+// With discovery on, Middleware also reports every request a route answers
+// to [prblm.Handler.NoteShadowedRoute], with the route's pattern
+// (c.FullPath()), so the [prblm.OnError] hook receives a note wrapping
+// [prblm.ErrShadowedDocumentation], once per route, when a route hides
+// documentation. The response is unchanged.
 func Middleware(opts ...prblm.Option) gin.HandlerFunc {
 	h := prblm.NewHandler(opts...)
-	discovery, discoveryPath := h.Discovery(), h.DiscoveryPath()
+	// DiscoveryPath renders the documentation now, so a rendering failure
+	// shows at startup.
+	isDiscoveryOn := h.DiscoveryPath() != ""
 
 	return func(c *gin.Context) {
-		if isDiscovery(c, discoveryPath) {
-			serveDiscovery(c, discovery)
-
+		if isDiscoveryOn && discover(h, c) {
 			return
 		}
 
@@ -67,28 +80,52 @@ func Middleware(opts ...prblm.Option) gin.HandlerFunc {
 	}
 }
 
-// isDiscovery reports whether c is a request for type documentation: a GET
-// or HEAD that no route claims (c.FullPath() is empty), for the discovery
-// path or a path under it. It is false when discovery is off (an empty
-// path).
-func isDiscovery(c *gin.Context, path string) bool {
-	if path == "" || c.FullPath() != "" {
+// discover handles c for discovery and reports whether it answered it.
+// When a route answers c (c.FullPath() is its pattern), the route is
+// reported to the shadowed-documentation check and c goes on. Otherwise
+// discovery is served only when no route claims the path for any method:
+// gin recorded 404 before running the global middleware. With
+// engine.HandleMethodNotAllowed on, a path that has a route only for
+// another method also has an empty FullPath, but gin recorded 405, and that
+// answer stays gin's.
+func discover(h *prblm.Handler, c *gin.Context) bool {
+	if route := c.FullPath(); route != "" {
+		// Only the method and the path are read: the headers matter only
+		// to a response.
+		h.NoteShadowedRoute(c.Request.Context(), route, prblm.DiscoveryRequest{
+			Method: c.Request.Method,
+			Path:   c.Request.URL.EscapedPath(),
+		})
+
 		return false
 	}
 
-	method, urlPath := c.Request.Method, c.Request.URL.Path
-	isRead := method == http.MethodGet || method == http.MethodHead
-
-	return isRead && (urlPath == path || strings.HasPrefix(urlPath, path+"/"))
+	return c.Writer.Status() == http.StatusNotFound && serveDiscovery(h, c)
 }
 
-// serveDiscovery answers c with the core discovery handler, exactly as
-// net/http would, and stops the chain. The status is committed at once:
+// serveDiscovery answers c with the core's discovery response, exactly as
+// net/http would, and stops the chain. It reports false, and does nothing,
+// when the request is not for discovery. The status is committed at once:
 // a 304 or a HEAD response has no body, so nothing else would send it.
-func serveDiscovery(c *gin.Context, discovery http.Handler) {
-	discovery.ServeHTTP(c.Writer, c.Request)
+func serveDiscovery(h *prblm.Handler, c *gin.Context) bool {
+	base := requestOf(c.Request)
+
+	res, ok := h.RespondDiscovery(c.Request.Context(), prblm.DiscoveryRequest{
+		Method: base.Method,
+		Path:   c.Request.URL.EscapedPath(),
+		Accept: base.Accept,
+		// Repeated lines form one list (RFC 9110, section 5.3).
+		IfNoneMatch: strings.Join(c.Request.Header.Values("If-None-Match"), ","),
+	})
+	if !ok {
+		return false
+	}
+
+	send(c.Writer, res)
 	c.Writer.WriteHeaderNow()
 	c.Abort()
+
+	return true
 }
 
 // errStatusOnly is the error behind a problem for a status-only abort, such

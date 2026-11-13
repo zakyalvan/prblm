@@ -56,13 +56,22 @@ func TestErrorHandler_Options(t *testing.T) {
 func TestErrorHandler_InvalidOptions(t *testing.T) {
 	t.Parallel()
 
+	errorHandler := func(opts ...prblm.Option) { fiberprblm.ErrorHandler(opts...) }
+
 	tests := []struct {
-		name  string
-		opts  []prblm.Option
-		named string
+		name      string
+		construct func(opts ...prblm.Option)
+		opts      []prblm.Option
+		named     string
 	}{
-		{name: "relative namespace", opts: []prblm.Option{prblm.WithNamespace("v1/api/probs")}, named: "WithNamespace"},
-		{name: "types and no namespace", opts: []prblm.Option{prblm.WithTypes(OutOfCredit)}, named: "WithTypes"},
+		{name: "relative namespace", construct: errorHandler, opts: []prblm.Option{prblm.WithNamespace("v1/api/probs")}, named: "WithNamespace"},
+		{name: "types and no namespace", construct: errorHandler, opts: []prblm.Option{prblm.WithTypes(OutOfCredit)}, named: "WithTypes"},
+		{
+			name:      "relative namespace in the discovery middleware",
+			construct: func(opts ...prblm.Option) { fiberprblm.Discovery(opts...) },
+			opts:      []prblm.Option{prblm.WithNamespace("v1/api/probs")},
+			named:     "WithNamespace",
+		},
 	}
 
 	for _, tt := range tests {
@@ -75,7 +84,7 @@ func TestErrorHandler_InvalidOptions(t *testing.T) {
 				}
 			}()
 
-			fiberprblm.ErrorHandler(tt.opts...)
+			tt.construct(tt.opts...)
 		})
 	}
 }

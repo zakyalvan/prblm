@@ -3,8 +3,11 @@ package prblm
 import (
 	"errors"
 	"fmt"
+	"maps"
 	"net/url"
 	"strings"
+	"sync"
+	"sync/atomic"
 )
 
 // WithNamespace sets the application's namespace for problem types: an
@@ -18,18 +21,32 @@ import (
 // [NewHandler] panics on an invalid namespace, including an empty one: it is
 // a startup misconfiguration, like an invalid pattern passed to
 // regexp.MustCompile.
+//
+// A later WithNamespace replaces an earlier one, as for other single-valued
+// options, and NewHandler checks only the final value, after applying every
+// option. An invalid namespace that a later one replaces is therefore never
+// reported.
 func WithNamespace(ns string) Option {
 	return func(h *Handler) {
-		h.namespace = mustParseNamespace(ns)
+		h.namespace, h.hasNamespace = ns, true
 	}
 }
 
-// ErrInvalidType is wrapped by the note the [OnError] hook receives when a
-// handler with a namespace (see [WithNamespace]) met a relative type that is
-// not a valid sub-type, and sent about:blank instead. A client would resolve
-// such a type against the request URL, which leads nowhere. Like
-// [ErrInvalidStatus], it is a mistake in a mapper, describer or enricher,
-// so a hook can tell it apart from the error being answered with errors.Is.
+// ErrInvalidType is wrapped by the note the [OnError] hook receives for a
+// relative type that a client would resolve against the request URL, which
+// leads nowhere:
+//
+//   - A handler with a namespace (see [WithNamespace]) met a relative type
+//     that is not a valid sub-type. It sent about:blank instead, with the
+//     status phrase as title.
+//   - A handler without a namespace met a relative type, for example from
+//     [Type.New]. It sent the type unchanged, because RFC 9457 allows
+//     relative references and that is what it always did, so the note is
+//     the only sign of the mistake.
+//
+// Like [ErrInvalidStatus], it is a mistake in a mapper, describer or
+// enricher, so a hook can tell it apart from the error being answered with
+// errors.Is.
 var ErrInvalidType = errors.New("prblm: problem type is not a valid sub-type")
 
 // ErrUndocumentedType is wrapped by the note the [OnError] hook receives when
@@ -199,4 +216,91 @@ func mustParseNamespace(ns string) string {
 	}
 
 	return parsed
+}
+
+const (
+	// maxCachedSubtypes bounds how many unregistered sub-types a handler
+	// keeps resolved. Sub-types come from code, so an application uses a few
+	// dozen; the bound only matters if a consumer puts request data into a
+	// type, and keeps memory bounded then.
+	maxCachedSubtypes = 256
+	// maxCachedSubtypeLen is the longest sub-type a handler keeps resolved,
+	// so the bound on entries also bounds the memory they use.
+	maxCachedSubtypeLen = 128
+)
+
+// typeCache keeps the resolved types of sub-types that have no
+// registered definition, so resolving one again allocates nothing. It
+// holds at most maxCachedSubtypes entries of at most maxCachedSubtypeLen
+// bytes; past that, sub-types are resolved without being kept.
+//
+// Reads are lock-free: they load an immutable map. A writer copies the map
+// under mu and publishes the copy, which costs at most maxCachedSubtypes
+// copies of a bounded map over the handler's life. A sync.Map would not
+// do: boxing the string key into an interface allocates on every lookup.
+//
+// The zero value is an empty cache, ready to use.
+type typeCache struct {
+	resolved atomic.Pointer[map[string]string]
+	mu       sync.Mutex
+}
+
+// resolve returns ns + "/" + subtype, from the cache when it is there, and
+// otherwise building it and keeping it while the cache has room.
+func (c *typeCache) resolve(ns, subtype string) string {
+	if typ, ok := c.load(subtype); ok {
+		return typ
+	}
+
+	typ := ns + "/" + subtype
+
+	// A full cache stays full, so a miss then takes no lock.
+	if len(subtype) <= maxCachedSubtypeLen && c.len() < maxCachedSubtypes {
+		c.store(subtype, typ)
+	}
+
+	return typ
+}
+
+// load returns the cached type of subtype.
+func (c *typeCache) load(subtype string) (string, bool) {
+	m := c.resolved.Load()
+	if m == nil {
+		return "", false
+	}
+
+	typ, ok := (*m)[subtype]
+
+	return typ, ok
+}
+
+// store publishes a copy of the cache with subtype resolved to typ, unless
+// the cache is full or another request stored it first.
+func (c *typeCache) store(subtype, typ string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	var current map[string]string
+	if m := c.resolved.Load(); m != nil {
+		current = *m
+	}
+
+	if _, ok := current[subtype]; ok || len(current) >= maxCachedSubtypes {
+		return
+	}
+
+	next := make(map[string]string, len(current)+1)
+	maps.Copy(next, current)
+	next[subtype] = typ
+	c.resolved.Store(&next)
+}
+
+// len returns the number of cached sub-types.
+func (c *typeCache) len() int {
+	m := c.resolved.Load()
+	if m == nil {
+		return 0
+	}
+
+	return len(*m)
 }

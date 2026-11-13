@@ -18,9 +18,13 @@ import (
 // errContract is the error the type resolution tests answer.
 var errContract = errors.New("contract rejected")
 
-// lockedOfType returns a 409 problem of type typ, titled Locked.
+// lockedDetail is the detail of the problems lockedOfType returns.
+const lockedDetail = "Contract 7 is locked."
+
+// lockedOfType returns a 409 problem of type typ, titled Locked, with the
+// detail lockedDetail.
 func lockedOfType(typ string) *prblm.Problem {
-	return prblm.New(http.StatusConflict, prblm.WithType(typ), prblm.WithTitle("Locked"))
+	return prblm.New(http.StatusConflict, prblm.WithType(typ), prblm.WithTitle("Locked"), prblm.WithDetail(lockedDetail))
 }
 
 // conflictOfType returns a mapper that answers errContract with
@@ -108,6 +112,44 @@ func TestWithNamespace_Validation(t *testing.T) {
 	}
 }
 
+// problem-types / Scenario: Namespace option order.
+func TestWithNamespace_Order(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		first     string
+		last      string
+		namespace string
+	}{
+		{name: "invalid replaced by valid", first: "bad", last: "/v1/api/probs", namespace: "/v1/api/probs"},
+		{name: "valid replaced by valid", first: "/a/probs", last: "/v1/api/probs", namespace: "/v1/api/probs"},
+		{name: "valid replaced by invalid", first: "/v1/api/probs", last: "bad"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			opts := []prblm.Option{prblm.WithNamespace(tt.first), prblm.WithNamespace(tt.last), conflictOfType("x")}
+
+			if tt.namespace == "" {
+				msg := mustPanic(t, func() { prblm.NewHandler(opts...) })
+				if !strings.Contains(msg, "WithNamespace") || !strings.Contains(msg, `"`+tt.last+`"`) {
+					t.Errorf("panic = %q, want a message naming WithNamespace and %q", msg, tt.last)
+				}
+
+				return
+			}
+
+			rec := answer(t, prblm.NewHandler(opts...), errContract)
+			if got, want := typeMember(t, rec), tt.namespace+"/x"; got != want {
+				t.Errorf("type = %q, want %q", got, want)
+			}
+		})
+	}
+}
+
 // problem-types / Scenario: Type resolved.
 func TestResolve_Namespace(t *testing.T) {
 	t.Parallel()
@@ -152,25 +194,70 @@ func TestResolve_Namespace(t *testing.T) {
 func TestResolve_NoNamespace(t *testing.T) {
 	t.Parallel()
 
-	for _, given := range []string{"contracts/blacklisted-supplier", "Contracts/X", "https://example.com/probs/x"} {
-		t.Run(given, func(t *testing.T) {
+	tests := []struct {
+		name     string
+		given    string
+		rendered string
+		isNoted  bool
+	}{
+		{name: "sub-type", given: "contracts/blacklisted-supplier", rendered: "contracts/blacklisted-supplier", isNoted: true},
+		{name: "invalid sub-type", given: "Contracts/X", rendered: "Contracts/X", isNoted: true},
+		{name: "absolute uri", given: "https://example.com/probs/x", rendered: "https://example.com/probs/x"},
+		{name: "absolute path", given: "/other/probs/x", rendered: "/other/probs/x"},
+		{name: "about:blank", given: "about:blank"},
+		{name: "empty"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
 			var r recorder
 
-			h := prblm.NewHandler(conflictOfType(given), prblm.OnError(r.hook))
+			h := prblm.NewHandler(conflictOfType(tt.given), prblm.OnError(r.hook))
 			rec := answer(t, h, errContract)
 
-			if got := typeMember(t, rec); got != given {
-				t.Errorf("type = %q, want %q", got, given)
+			if got := typeMember(t, rec); got != tt.rendered {
+				t.Errorf("type = %q, want %q", got, tt.rendered)
 			}
 
-			//nolint:errorlint // the only call must be the error being answered itself.
-			if calls := r.recorded(); len(calls) != 1 || calls[0].err != errContract {
-				t.Errorf("hook calls = %+v, want only the call with the answered error", calls)
-			}
+			assertTypeNote(t, r.recorded(), tt.isNoted, errContract)
 		})
 	}
+}
+
+// assertTypeNote checks that the hook calls are the answered error alone,
+// or, when isNoted, a note wrapping ErrInvalidType followed by it.
+func assertTypeNote(t *testing.T, calls []hookCall, isNoted bool, answered error) {
+	t.Helper()
+
+	//nolint:errorlint // the last call must be the answered error itself.
+	switch {
+	case isNoted && (len(calls) != 2 || !errors.Is(calls[0].err, prblm.ErrInvalidType) || calls[1].err != answered):
+		t.Errorf("hook calls = %+v, want an ErrInvalidType note, then the answered error", calls)
+	case !isNoted && (len(calls) != 1 || calls[0].err != answered):
+		t.Errorf("hook calls = %+v, want only the call with the answered error", calls)
+	}
+}
+
+// problem-types / Scenario: Problem from a definition without a namespace.
+func TestType_New_NoNamespace(t *testing.T) {
+	t.Parallel()
+
+	var r recorder
+
+	h := prblm.NewHandler(prblm.OnError(r.hook), prblm.WithMappers(
+		prblm.Is(errContract, func(error) *prblm.Problem { return outOfCredit.New() }),
+	))
+
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/v1/orders/42", http.NoBody)
+	rec := answerRequest(h, errContract, req)
+
+	if got := typeMember(t, rec); got != "out-of-credit" {
+		t.Errorf("type = %q, want %q", got, "out-of-credit")
+	}
+
+	assertTypeNote(t, r.recorded(), true, errContract)
 }
 
 // problem-types / Scenario: Hostile host headers.
@@ -286,14 +373,18 @@ func answerFrom(t *testing.T, src typeSource, extra ...prblm.Option) *httptest.R
 	return answerRequest(h, src.err, contractRequest(ctx))
 }
 
-// assertLockedWithoutType checks that rec is the 409 problem titled Locked
-// with no type member.
-func assertLockedWithoutType(t *testing.T, rec *httptest.ResponseRecorder) {
+// assertConflictWithoutType checks that rec is the 409 problem of
+// lockedOfType after its type became about:blank: no type member, the
+// status phrase Conflict as title instead of Locked, which was written for
+// the lost type, and the detail kept.
+func assertConflictWithoutType(t *testing.T, rec *httptest.ResponseRecorder) {
 	t.Helper()
 
 	m := decodeMembers(t, rec.Body.Bytes())
-	if _, ok := m["type"]; ok || rec.Code != http.StatusConflict || m["title"] != "Locked" {
-		t.Errorf("response %d %v, want 409 titled Locked without a type", rec.Code, m)
+
+	_, hasType := m["type"]
+	if hasType || rec.Code != http.StatusConflict || m["title"] != "Conflict" || m["detail"] != lockedDetail {
+		t.Errorf("response %d %v, want 409 titled Conflict with detail %q and without a type", rec.Code, m, lockedDetail)
 	}
 }
 
@@ -321,13 +412,8 @@ func TestResolve_InvalidType(t *testing.T) {
 			var r recorder
 
 			rec := answerFrom(t, src, prblm.OnError(r.hook))
-			assertLockedWithoutType(t, rec)
-
-			calls := r.recorded()
-			//nolint:errorlint // the last call must be the answered error itself.
-			if len(calls) != 2 || !errors.Is(calls[0].err, prblm.ErrInvalidType) || calls[1].err != src.err {
-				t.Errorf("hook calls = %+v, want an ErrInvalidType note, then the answered error", calls)
-			}
+			assertConflictWithoutType(t, rec)
+			assertTypeNote(t, r.recorded(), true, src.err)
 		})
 	}
 }
@@ -377,7 +463,7 @@ func TestResolve_InvalidType_FaultyHook(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			assertLockedWithoutType(t, answerFrom(t, handlerMapper("Bad Type"), prblm.OnError(tt.hook)))
+			assertConflictWithoutType(t, answerFrom(t, handlerMapper("Bad Type"), prblm.OnError(tt.hook)))
 		})
 	}
 }
@@ -553,6 +639,44 @@ func TestResolve_Undocumented(t *testing.T) {
 
 			if isNoted != tt.isNoted || len(calls) != map[bool]int{true: 2, false: 1}[tt.isNoted] {
 				t.Errorf("hook calls = %+v, want an ErrUndocumentedType note: %v", calls, tt.isNoted)
+			}
+		})
+	}
+}
+
+// problem-types / Scenario: Type notes cost nothing without a hook.
+//
+//nolint:paralleltest // AllocsPerRun counts allocations process-wide; parallel tests would skew it.
+func TestResolve_NoHookAllocs(t *testing.T) {
+	tests := []struct {
+		name   string
+		given  string
+		config []prblm.Option
+	}{
+		{name: "no namespace", given: "contracts/x"},
+		{name: "invalid sub-type", given: "Bad Type", config: []prblm.Option{prblm.WithNamespace("/v1/api/probs")}},
+		{
+			name:  "undocumented sub-type",
+			given: "contracts/unknown",
+			config: []prblm.Option{
+				prblm.WithNamespace("/v1/api/probs"),
+				prblm.WithTypes(blacklistedSupplier),
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			resolving := func(typ string) float64 {
+				h := prblm.NewHandler(tt.config...)
+				err := lockedOfType(typ)
+				ctx := t.Context()
+
+				return testing.AllocsPerRun(100, func() { _ = h.Resolve(ctx, err) })
+			}
+
+			if got, blank := resolving(tt.given), resolving("about:blank"); got > blank {
+				t.Errorf("resolving type %q allocates %v times, want no more than the %v of about:blank", tt.given, got, blank)
 			}
 		})
 	}

@@ -26,9 +26,19 @@ type Handler struct {
 	enrichers []func(ctx context.Context, p *Problem)
 	// onError is the hook set with OnError, or nil.
 	onError func(ctx context.Context, err error, p *Problem)
-	// namespace is the checked namespace set with WithNamespace, without
-	// its trailing slash, or "" for none.
+	// namespace is the namespace set with WithNamespace: as given until
+	// NewHandler checks it, then without its trailing slash, or "" for none.
 	namespace string
+	// hasNamespace is set by WithNamespace, so that NewHandler checks the
+	// final namespace once, even an empty one.
+	hasNamespace bool
+	// registered maps the sub-type of every registered definition to its
+	// resolved type, built once in NewHandler, so resolving a documented
+	// sub-type allocates nothing. It is also the set of documented
+	// sub-types the undocumented-type note checks.
+	registered map[string]string
+	// unregistered keeps the resolved types of other sub-types, bounded.
+	unregistered typeCache
 	// definitions are the non-nil types passed to WithTypes, in order.
 	definitions []*Type
 	// discovery is the rendered documentation of the definitions, or nil
@@ -44,10 +54,12 @@ type Handler struct {
 // does not change after NewHandler returns and is safe for concurrent use.
 //
 // NewHandler panics when an option is invalid: a malformed [WithNamespace],
-// or [WithTypes] with a duplicate sub-type or without a namespace. That is a
+// or [WithTypes] with an invalid definition, a duplicate sub-type or without
+// a namespace. That is a
 // startup misconfiguration, so it fails when the program starts rather than
 // inside a request. The checks run after all options are applied, so their
-// order does not matter.
+// order does not matter, except that the last WithNamespace replaces earlier
+// ones and is the only one checked.
 func NewHandler(opts ...Option) *Handler {
 	h := &Handler{builtins: builtins}
 
@@ -57,7 +69,11 @@ func NewHandler(opts ...Option) *Handler {
 		}
 	}
 
-	h.checkTypes()
+	if h.hasNamespace {
+		h.namespace = mustParseNamespace(h.namespace)
+	}
+
+	h.registered = h.checkTypes()
 	h.discovery = h.newDiscovery()
 
 	return h
@@ -84,7 +100,10 @@ func NewHandler(opts ...Option) *Handler {
 // replaced by 500, because a problem response must be an error; unless the
 // status was missing, the mistake is reported to the [OnError] hook. An
 // about:blank problem without a title gets the HTTP reason phrase of its
-// status. Finally the enrichers run (see [WithEnrichers]).
+// status. Then the enrichers run (see [WithEnrichers]), and last the type is
+// resolved against the namespace (see [WithNamespace]), so a type an
+// enricher sets is resolved too. A type that becomes about:blank loses its
+// title, which then becomes the reason phrase as well.
 func (h *Handler) Resolve(ctx context.Context, err error) *Problem {
 	if err == nil {
 		return nil
@@ -193,42 +212,85 @@ func (h *Handler) enrich(ctx context.Context, p *Problem) {
 // resolveType turns the relative sub-type of p into a type under the
 // handler's namespace. An empty type, about:blank, an absolute URI such as a
 // urn: and an absolute path are kept. Any other relative type is a mistake:
-// it becomes about:blank, and is reported to the hook with a note wrapping
-// ErrInvalidType. Without a namespace, every type is kept. With discovery
+// it becomes about:blank, its title is cleared so that it becomes the status
+// phrase, and it is reported to the hook with a note wrapping
+// ErrInvalidType. Without a namespace, every type is kept, and a relative
+// one is reported with the same note, since it leads nowhere. With discovery
 // on, a resolved sub-type without a definition is reported with a note
 // wrapping ErrUndocumentedType, because its type URL leads to a 404.
 //
 // Only the configured namespace is used, never the request's Host header,
 // which a client controls.
 func (h *Handler) resolveType(ctx context.Context, p *Problem) {
-	if h.namespace == "" || isKeptType(p.Type) {
+	if isKeptType(p.Type) {
+		return
+	}
+
+	if h.namespace == "" {
+		// Passed through, as before namespaces existed and as RFC 9457
+		// allows, but a client resolves it against the request URL.
+		h.noteType(ctx, ErrInvalidType, p.Type, p)
+
+		return
+	}
+
+	if typ, ok := h.registered[p.Type]; ok {
+		p.Type = typ
+
 		return
 	}
 
 	if isSubtype(p.Type) {
 		subtype := p.Type
-		p.Type = h.namespace + "/" + subtype
+		p.Type = h.unregistered.resolve(h.namespace, subtype)
 
-		if h.discovery != nil && !h.discovery.documents(subtype) {
-			h.report(ctx, fmt.Errorf("%w: %q", ErrUndocumentedType, subtype), p)
+		if h.discovery != nil {
+			h.noteType(ctx, ErrUndocumentedType, subtype, p)
 		}
 
 		return
 	}
 
+	// A title written for the lost type would now describe about:blank, so
+	// it goes too, and the second finalize sets the status phrase, as RFC
+	// 9457 (section 4.2.1) asks for about:blank.
 	given := p.Type
-	p.Type = ""
+	p.Type, p.Title = "", ""
 
-	h.report(ctx, fmt.Errorf("%w: %q", ErrInvalidType, given), p)
+	h.noteType(ctx, ErrInvalidType, given, p)
 }
 
-// report calls the OnError hook, if any. A hook that panics is ignored:
-// there is nowhere left to report it, and the response must still go out.
-func (h *Handler) report(ctx context.Context, err error, p *Problem) {
-	if h.onError == nil {
+// noteType reports a type mistake to the hook as a note wrapping sentinel
+// and naming typ. The note is built only when there is a hook to receive
+// it, so resolving a type allocates nothing for notes nobody reads.
+func (h *Handler) noteType(ctx context.Context, sentinel error, typ string, p *Problem) {
+	if !h.isReporting(ctx) {
 		return
 	}
 
+	h.callHook(ctx, fmt.Errorf("%w: %q", sentinel, typ), p)
+}
+
+// report calls the OnError hook, if any and unless ctx is silenced. A hook
+// that panics is ignored: there is nowhere left to report it, and the
+// response must still go out.
+func (h *Handler) report(ctx context.Context, err error, p *Problem) {
+	if h.isReporting(ctx) {
+		h.callHook(ctx, err, p)
+	}
+}
+
+// isReporting reports whether a report in ctx reaches a hook: there is one,
+// and the request is not answered silently (see silentRequest). Callers
+// check it before building a report, so nobody pays for one that nobody
+// reads.
+func (h *Handler) isReporting(ctx context.Context) bool {
+	return h.onError != nil && !isSilent(ctx)
+}
+
+// callHook calls the OnError hook, which the caller has checked with
+// isReporting. A hook that panics is ignored.
+func (h *Handler) callHook(ctx context.Context, err error, p *Problem) {
 	defer func() { _ = recover() }()
 
 	h.onError(ctx, err, p)
@@ -493,60 +555,80 @@ func (h *Handler) mustExist(method string) {
 // documentation.
 
 // checkTypes checks the definitions passed to WithTypes, once all options
-// are applied, and panics on a missing namespace or a duplicate sub-type.
-func (h *Handler) checkTypes() {
+// are applied, and returns the resolved type of each, by sub-type, or nil
+// when none is registered. It panics on a missing namespace, an invalid
+// definition or a duplicate sub-type. Every definition is checked again as
+// DefineType checks it, because a Type such as &Type{} can be built without
+// it.
+func (h *Handler) checkTypes() map[string]string {
 	if len(h.definitions) == 0 {
-		return
+		return nil
 	}
 
 	if h.namespace == "" {
 		panic("prblm: WithTypes: types need WithNamespace")
 	}
 
-	seen := make(map[string]struct{}, len(h.definitions))
+	resolved := make(map[string]string, len(h.definitions))
 
 	for _, t := range h.definitions {
-		if _, ok := seen[t.subtype]; ok {
+		if err := validateType(t.subtype, t.status, t.title); err != nil {
+			panic("prblm: WithTypes: invalid definition: " + err.Error())
+		}
+
+		if _, ok := resolved[t.subtype]; ok {
 			panic(fmt.Sprintf("prblm: WithTypes: duplicate sub-type %q", t.subtype))
 		}
 
-		seen[t.subtype] = struct{}{}
+		resolved[t.subtype] = h.namespace + "/" + t.subtype
 	}
+
+	return resolved
 }
 
-// newDiscovery renders the documentation of the handler's types, or returns
-// nil when discovery is off.
+// newDiscovery returns the discovery of the handler's types, or nil when
+// discovery is off. The pages are rendered on first use, so a handler that
+// never serves discovery, such as the one gin's Recovery builds, never
+// renders them.
 func (h *Handler) newDiscovery() *discovery {
 	if len(h.definitions) == 0 || h.isDiscoveryDisabled {
 		return nil
 	}
 
-	d := &discovery{
-		docs: make(map[string]pages, len(h.definitions)),
-		path: namespacePath(h.namespace),
-	}
+	ns, definitions := h.namespace, h.definitions
 
-	sorted := slices.SortedFunc(slices.Values(h.definitions), func(a, b *Type) int {
+	d := newLazyDiscovery(namespacePath(ns), func() site { return renderSite(ns, definitions) })
+	d.documented = h.registered
+
+	return d
+}
+
+// renderSite renders the documentation of definitions under the namespace
+// ns: a page per type and the index, sorted by sub-type.
+func renderSite(ns string, definitions []*Type) site {
+	sorted := slices.SortedFunc(slices.Values(definitions), func(a, b *Type) int {
 		return cmp.Compare(a.subtype, b.subtype)
 	})
 
+	docs := make(map[string]pages, len(sorted))
 	index := indexDoc{Types: make([]indexEntry, 0, len(sorted))}
 
 	for _, t := range sorted {
 		doc := typeDoc{
-			Type:        h.namespace + "/" + t.subtype,
+			Type:        ns + "/" + t.subtype,
 			Subtype:     t.subtype,
 			Status:      t.status,
 			Title:       t.title,
 			Description: t.description,
 		}
-		d.docs[t.subtype] = pages{html: htmlPage(t.subtype, docTemplate, doc), json: jsonPage(t.subtype, doc)}
+		docs[t.subtype] = pages{html: htmlPage(t.subtype, docTemplate, doc), json: jsonPage(t.subtype, doc)}
 		index.Types = append(index.Types, indexEntry{Type: doc.Type, Subtype: doc.Subtype, Status: doc.Status, Title: doc.Title})
 	}
 
-	d.index = pages{html: htmlPage("index", indexTemplate, index), json: jsonPage("index", index)}
-
-	return d
+	return site{
+		docs:  docs,
+		index: pages{html: htmlPage("index", indexTemplate, index), json: jsonPage("index", index)},
+	}
 }
 
 // DiscoveryPath returns the path the documentation of the registered types
@@ -566,59 +648,172 @@ func (h *Handler) DiscoveryPath() string {
 		return ""
 	}
 
+	// Every adapter and every net/http mount calls DiscoveryPath when it is
+	// set up, so rendering here makes a rendering failure surface at
+	// startup.
+	h.discovery.site()
+
 	return h.discovery.path
 }
 
 // Discovery returns an [http.Handler] that serves the documentation of the
 // registered types at their type URLs, so a client can dereference a
-// problem's type, as RFC 9457 recommends. It is never nil: with discovery
-// off, it answers every request with a 404 problem.
+// problem's type, as RFC 9457 recommends. It is never nil. It answers with
+// [Handler.RespondDiscovery], and otherwise with a problem: with discovery
+// off, a 404 to every request; with discovery on, a 405 with Allow: GET,
+// HEAD to any method other than GET and HEAD, and a 404 to a GET or HEAD
+// outside the discovery path. It is meant to be mounted at the discovery
+// path, where every request is for it.
 //
 // Discovery panics when h is nil.
 func (h *Handler) Discovery() http.Handler {
 	h.mustExist("Discovery")
 
+	// Rendered here, when the handler is mounted, so a rendering failure
+	// surfaces at startup rather than on the first request.
+	if h.discovery != nil {
+		h.discovery.site()
+	}
+
 	return http.HandlerFunc(h.serveDiscovery)
 }
 
-// serveDiscovery serves one discovery request.
+// serveDiscovery serves one discovery request over net/http.
 func (h *Handler) serveDiscovery(w http.ResponseWriter, r *http.Request) {
-	d := h.discovery
-
-	switch {
-	case d == nil:
-		h.writeProblem(w, r, New(http.StatusNotFound))
-
-		return
-	case r.Method != http.MethodGet && r.Method != http.MethodHead:
-		h.writeProblem(w, r, New(http.StatusMethodNotAllowed, WithHeader("Allow", "GET, HEAD")))
-
-		return
+	base := requestOf(r)
+	req := DiscoveryRequest{
+		Method:      base.Method,
+		Path:        r.URL.EscapedPath(),
+		Accept:      base.Accept,
+		IfNoneMatch: strings.Join(r.Header.Values("If-None-Match"), ","),
 	}
 
-	doc, ok := d.lookup(r.URL)
+	res, ok := h.RespondDiscovery(r.Context(), req)
 	if !ok {
-		h.writeProblem(w, r, New(http.StatusNotFound))
+		var p *Problem
+		if h.discovery == nil || isReadMethod(r.Method) {
+			p = New(http.StatusNotFound)
+		} else {
+			p = New(http.StatusMethodNotAllowed, WithHeader("Allow", "GET, HEAD"))
+		}
 
-		return
+		res = headless(req.Method, h.discoveryProblem(r.Context(), req, p))
 	}
 
-	// Repeated If-None-Match lines form one list (RFC 9110, section 5.3).
-	ifNoneMatch := strings.Join(r.Header.Values("If-None-Match"), ",")
-	writeDiscovery(w, r, doc.negotiate(requestOf(r).Accept).response(ifNoneMatch))
+	track(w).send(res)
 }
 
-// writeProblem answers a discovery request with p, completed and rendered
-// like any other problem, but without calling the OnError hook: no
-// application error occurred.
-func (h *Handler) writeProblem(w http.ResponseWriter, r *http.Request, p *Problem) {
-	req := requestOf(r)
-	ctx := withRequest(r.Context(), req)
+// RespondDiscovery returns the discovery response to req without writing
+// it, so every framework adapter serves discovery by the same rules, and
+// sends the same bytes as [Handler.Discovery]. It reports false when req is
+// not for discovery: discovery is off, the method is not GET or HEAD, or
+// req.Path is neither the discovery path (see [Handler.DiscoveryPath]),
+// that path with a trailing "/", nor under it. The adapter then handles the
+// request as usual.
+//
+// Otherwise the response is the documentation or the index, negotiated by
+// req.Accept, a 304 when req.IfNoneMatch matches its ETag, or a 404 problem
+// for a path that names no registered type. The path is matched exactly in
+// its escaped form, so a sub-type spelled with escapes ("%2D"), a malformed
+// escape ("%zz") or a traversal ("%2e%2e") is a 404, and every page has
+// exactly one URL. For HEAD the body is empty and the headers are those of
+// the GET. The problems discovery sends never reach the [OnError] hook,
+// because no application error occurred.
+//
+// RespondDiscovery panics when h is nil.
+func (h *Handler) RespondDiscovery(ctx context.Context, req DiscoveryRequest) (Response, bool) {
+	h.mustExist("RespondDiscovery")
+
+	d := h.discoveryFor(req)
+	if d == nil {
+		return Response{}, false
+	}
+
+	var res Response
+
+	if doc, ok := d.lookup(req.Path); ok {
+		res = doc.negotiate(req.Accept).response(req.IfNoneMatch)
+	} else {
+		res = h.discoveryProblem(ctx, req, New(http.StatusNotFound))
+	}
+
+	return headless(req.Method, res), true
+}
+
+// NoteShadowedRoute reports that req was answered by the application route
+// with the pattern route, so the OnError hook learns when that route hides
+// type documentation. A framework adapter calls it for every request a
+// route answers, with the route's pattern (gin's c.FullPath(), fiber's
+// c.Route().Path); net/http gives no such hook point. Only req.Method and
+// req.Path are read, so an adapter need not read the headers.
+//
+// When discovery would have served a documentation page or the index for
+// req, the hook receives a note wrapping [ErrShadowedDocumentation] that
+// names the route and the path, with a nil problem. Each route is noted
+// once, at its first conflicting request, so one conflict cannot flood the
+// log, and at most 256 routes are noted. There is no note when discovery is
+// off, the method is not GET or HEAD, the path is outside the discovery
+// path, or discovery would have answered it with a 404, since an unknown
+// sub-type hides nothing. Without a hook nothing is built or remembered.
+//
+// NoteShadowedRoute panics when h is nil.
+func (h *Handler) NoteShadowedRoute(ctx context.Context, route string, req DiscoveryRequest) {
+	h.mustExist("NoteShadowedRoute")
+
+	d := h.discoveryFor(req)
+	if d == nil || !h.isReporting(ctx) {
+		return
+	}
+
+	if !d.hasPage(req.Path) || !d.noted.add(route) {
+		return
+	}
+
+	h.callHook(ctx, fmt.Errorf("%w: route %q hides %q", ErrShadowedDocumentation, route, req.Path), nil)
+}
+
+// discoveryFor returns the discovery that req is for, or nil when it is
+// not for discovery: discovery is off, the method is not GET or HEAD, or
+// the path is outside the discovery path. It is the one rule every adapter
+// relies on, through RespondDiscovery and NoteShadowedRoute.
+func (h *Handler) discoveryFor(req DiscoveryRequest) *discovery {
+	d := h.discovery
+	if d == nil || !isReadMethod(req.Method) || !d.isUnder(req.Path) {
+		return nil
+	}
+
+	return d
+}
+
+// discoveryProblem renders p as the answer to the discovery request req,
+// completed and rendered like any other problem, but answered silently:
+// the OnError hook is not called, not even for a note about a faulty
+// enricher or a failed encoding, because no application error occurred.
+// The instance is the path as the client sent it.
+func (h *Handler) discoveryProblem(ctx context.Context, req DiscoveryRequest, p *Problem) Response {
+	r := Request{Method: req.Method, Path: req.Path, Accept: req.Accept}
+	ctx = silentRequest(ctx, r)
 
 	h.complete(ctx, p)
-	res, _ := h.render(ctx, req, p)
+	res, _ := h.render(ctx, r, p)
 
-	writeDiscovery(w, r, res)
+	return res
+}
+
+// headless returns res as the answer to a request with method: for HEAD,
+// the same headers and no body.
+func headless(method string, res Response) Response {
+	if method == http.MethodHead {
+		res.Body = nil
+	}
+
+	return res
+}
+
+// isReadMethod reports whether method is GET or HEAD, the only methods
+// discovery serves.
+func isReadMethod(method string) bool {
+	return method == http.MethodGet || method == http.MethodHead
 }
 
 // defaultInstance sets the instance of p to the path of the request being

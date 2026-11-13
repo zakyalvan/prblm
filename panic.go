@@ -32,11 +32,11 @@ func (e *PanicError) Unwrap() error {
 // safeCall runs consumer code. A panic in fn is recovered and reported to the
 // OnError hook as a *PanicError, and safeCall then returns the zero value, so
 // faulty consumer code cannot break the response. The stack is only captured
-// when there is a hook to receive it.
+// when a hook will receive it.
 func safeCall[T any](ctx context.Context, h *Handler, fn func() T) T {
 	defer func() {
-		if v := recover(); v != nil && h.onError != nil {
-			h.report(ctx, &PanicError{Value: v, Stack: debug.Stack()}, nil)
+		if v := recover(); v != nil && h.isReporting(ctx) {
+			h.callHook(ctx, &PanicError{Value: v, Stack: debug.Stack()}, nil)
 		}
 	}()
 

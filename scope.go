@@ -32,14 +32,37 @@ func scopedMappers(ctx context.Context) []Mapper {
 
 // withRequest returns ctx carrying req, for [RequestFrom].
 func withRequest(ctx context.Context, req Request) context.Context {
-	return context.WithValue(ctx, requestKey{}, req)
+	return context.WithValue(ctx, requestKey{}, answered{req: req})
+}
+
+// silentRequest returns a copy of ctx carrying req, answered without
+// calling the OnError hook: discovery answers its 404 and 405 with
+// problems, but no application error occurred, so a note about them would
+// mislead. The mark lives with the request, so a request answered inside
+// it, with its own withRequest, is reported as usual.
+func silentRequest(ctx context.Context, req Request) context.Context {
+	return context.WithValue(ctx, requestKey{}, answered{req: req, isSilent: true})
+}
+
+// answered is the request being answered, as a context carries it.
+type answered struct {
+	req      Request
+	isSilent bool
+}
+
+// isSilent reports whether the request ctx carries is answered silently.
+// The request is the newest context value, so the lookup stops early.
+func isSilent(ctx context.Context) bool {
+	a, ok := ctx.Value(requestKey{}).(answered)
+
+	return ok && a.isSilent
 }
 
 // RequestFrom returns the request that [Handler.Respond] or
 // [Handler.Recover] is answering, for use in enrichers and hooks. It reports
 // false outside of them.
 func RequestFrom(ctx context.Context) (Request, bool) {
-	req, ok := ctx.Value(requestKey{}).(Request)
+	a, ok := ctx.Value(requestKey{}).(answered)
 
-	return req, ok
+	return a.req, ok
 }

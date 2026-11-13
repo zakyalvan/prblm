@@ -159,7 +159,76 @@ Every slice ends with:
 - [x] 7.2 Add a README "Problem types" walkthrough (namespace, definitions, mapper, discovery for net/http, gin and fiber) and a framework-differences row for discovery serving; verify every code block is mirrored by a compiling Example
 - [x] 7.3 Run `go_vulncheck` and confirm no new findings; run all four modules' suites with `-race`, and `GOWORK=off` for the three published modules
 
+## 8. Slice: review fixes (verify and PR #3 code review)
+
+Each task fixes one finding in the working system. Each starts from a failing test that reproduces the finding (rule 8), and the test stays as the RED step.
+
+- [x] 8.1 Prove that gin records 404 for an unmatched path and 405 for a path with a route only for another method under `engine.HandleMethodNotAllowed`, before the global middleware runs (CLAUDE.md rule 8; design D5); verify `go test -run TestGinNoMethod_RecordsStatus` passes in `ginprblm`, and record the result in design D5. If it fails, stop and re-plan with the D5 fallback.
+- [x] 8.2 Reject invalid definitions in `WithTypes` (problem-types / Scenario: Registration validated, the `&Type{}` rows); verify `go test -run TestWithTypes_Validation` passes
+  - RED: add the two `&Type{}` rows; they fail because construction succeeds.
+  - GREEN: extract `validateType(subtype, status, title) error` from `DefineType` and call it for every definition in `checkTypes`.
+  - REFACTOR: Extract Function done in GREEN; check the `DefineType` messages are unchanged; /simplify
+- [x] 8.3 Make nil and zero-value definitions safe (problem-types / Scenario: Nil definition, the zero-value rows; Scenario: Nil definition accessors); verify `go test -run 'TestType_New_Nil|TestType_NilAccessors'` passes
+  - RED: the zero-value rows fail (status 0 normalized, detail sent); the accessor rows panic.
+  - GREEN: `New` returns the fallback when `t == nil || t.subtype == ""`; the accessors return zero values on a nil receiver.
+- [x] 8.4 Use the last `WithNamespace` and validate it in `NewHandler` (problem-types / Scenario: Namespace option order); verify `go test -race -run 'TestWithNamespace_Validation|TestWithNamespace_Order'` passes in the core, and the adapters' invalid-option tests still pass
+  - RED: the `WithNamespace("bad"), WithNamespace("/v1/api/probs")` row fails with a panic (reproduced during verify).
+  - GREEN: `WithNamespace` stores the raw value and sets a "namespace given" flag; `NewHandler` runs `mustParseNamespace` once, after all options, before `checkTypes`.
+  - REFACTOR: update the `WithNamespace` and `NewHandler` godoc; /simplify
+- [x] 8.5 Reset the title when an invalid type becomes about:blank (problem-types / Scenario: Invalid relative type, all rows now expecting `Conflict` and the detail); verify `go test -race -run 'TestResolve_InvalidType'` passes
+  - RED: change the expected title to `Conflict` and add the detail; the rows fail with `Locked`.
+  - GREEN: clear `p.Title` with `p.Type` in `resolveType`, so the second `finalize` sets the status phrase.
+- [x] 8.6 Note relative types without a namespace (problem-types / Scenario: No namespace, Scenario: Problem from a definition without a namespace); verify `go test -run 'TestResolve_NoNamespace|TestType_New_NoNamespace'` passes
+  - RED: the "receives" rows fail because no note is sent.
+  - GREEN: in `resolveType`, without a namespace, report `ErrInvalidType` for a type that `isKeptType` does not keep, and keep the type. Update the `ErrInvalidType` godoc to name both cases and the reason.
+- [x] 8.7 Build type notes only when a hook is set, and resolve sub-types without rebuilding them (problem-types / Scenario: Type notes cost nothing without a hook; design D2); verify `go test -run 'TestResolve_NoHookAllocs|TestTypeCache'` passes
+  - RED: `testing.AllocsPerRun` shows the extra allocations of `fmt.Errorf` for each row.
+  - GREEN: check `h.onError != nil` before building any note in `resolveType` (`noteType`).
+  - Found while going GREEN: the undocumented row still allocated once more than `about:blank`, because resolving any sub-type concatenates `ns + "/" + subtype` (measured: a documented sub-type with no note also allocates 3, against 2 for `about:blank`). Decided with the user: keep the scenario as written. Resolve registered sub-types once in `NewHandler`, and cache other valid sub-types in a bounded, copy-on-write cache (`TestTypeCache_Resolve`, `_Bounded`, `_Concurrent`, `_NoAllocs`).
+- [x] 8.8 Keep discovery problems away from the hook (type-discovery / Scenario: Discovery problems never reach the hook); verify `go test -race -run TestDiscovery_SilentHook` passes
+  - RED: the panicking-enricher and unencodable-extension rows record a note.
+  - GREEN: discovery completes and renders its problems under an unexported context marker that `report` honors.
+- [x] 8.9 Add `DiscoveryRequest` and `Handler.RespondDiscovery`, and rebuild `Discovery()` on it (type-discovery / Scenario: Discovery response for a request); verify `go test -race -run 'TestRespondDiscovery|TestDiscovery_'` passes, all existing discovery tests included
+  - RED: `TestRespondDiscovery` with one case per row; it fails to compile because the method doesn't exist. Run `go_symbol_references` on `serveDiscovery` and `lookup` first.
+  - GREEN: implement the method-, path- and `%`-rules in `RespondDiscovery`; `Discovery()` answers 405 for other methods, 404 for a `false` result, and writes the result otherwise.
+  - REFACTOR: Inline the old `lookup` path checks into the single rule; /simplify
+- [x] 8.10 Render discovery pages on first use (type-discovery / Scenario: Pages rendered on first use; design D1 and D4); verify `go test -race -run 'TestDiscovery_FirstUse|TestDiscovery_Concurrent'` passes, and that `ginprblm.Recovery` with `WithTypes` renders nothing (an internal test counting renders)
+  - RED: the render-count test fails because `NewHandler` renders eagerly.
+  - GREEN: keep the documented sub-type set eager; render the pages under a `sync.Once` triggered by `DiscoveryPath`, `Discovery` and `RespondDiscovery`.
+- [x] 8.11 Serve gin discovery through `RespondDiscovery` only on a recorded 404 (gin-adapter / Scenario: Discovery through gin, the `HandleMethodNotAllowed` rows); verify `go test -race -run TestMiddleware_Discovery` passes
+  - RED: the 405 rows return the documentation (reproduced in the PR #3 code review).
+  - GREEN: check `c.FullPath() == ""` and `c.Writer.Status() == http.StatusNotFound`, then call `RespondDiscovery` with `c.Request.URL.EscapedPath()`; delete the adapter's own method and path checks.
+- [x] 8.12 Serve fiber discovery through `RespondDiscovery` (fiber-adapter / Scenario: Discovery through fiber, the method-not-allowed and `%zz` rows); verify `go test -race -run 'TestErrorHandler_Discovery|TestFiberNotFound_Distinguishable'` passes
+  - RED: add the two rows; check whether they fail before the refactor, and record the result.
+  - Result: both rows pass before the refactor, so neither is a defect in fiber (the `%zz` row already existed as "malformed escape"; the new "route for another method" row gets fiber's `ErrMethodNotAllowed`, which never reached discovery). They stay as regression rows, and the change is a pure refactor: `isDiscovery`, `recorder` and the `http.Request` conversion are deleted, and `ErrorHandler` calls `RespondDiscovery` with the original path.
+  - GREEN: call `RespondDiscovery` with the raw request path and the two headers; delete `recorder`, the `http.Request` conversion and the adapter's own path checks.
+- [x] 8.13 Fix the stale `Resolve` godoc (type resolution now runs after the enrichers) and document `RespondDiscovery`, `DiscoveryRequest`, the no-namespace note and the title reset (godoc, README "Problem types", CHANGELOG); verify `go test -run Example` passes in all modules
+- [x] 8.14 Cover the `xmlenc` decode guard: extract `decodeTree(b []byte) (any, error)` from `Encode` and test it with malformed JSON; verify `go tool cover -func` shows `internal/xmlenc` at 100%
+- [x] 8.15 Verify slice 8 end to end: the parity test still passes byte for byte, `go tool cover -func` covers every new branch (`resolveType`, `validateType`, `RespondDiscovery`, the gin and fiber discovery branches), and diagnostics, vet, lint, `-race` and `GOWORK=off` are clean in all four modules
+
+### Review findings: shadowed documentation and HEAD (from `/opsx:verify` and `/code-review high`)
+
+- [x] 8.16 Prove that a fiber `app.Use` middleware sees the endpoint route after `c.Next()` returns: `c.Matched()` is true and `c.Route().Path` is the route's pattern for a matched GET and HEAD, and `c.Matched()` is false for an unmatched path (CLAUDE.md rule 8; design D6); verify `go test -run TestFiberMiddleware_SeesRoute` passes in `fiberprblm`, and record the result in design D6. If it fails, stop and re-plan the fiber middleware.
+- [x] 8.17 Note routes that hide documentation in the core (type-discovery / Scenario: Shadowed documentation, both tables); verify `go test -race -run TestNoteShadowedRoute` passes
+  - RED: `TestNoteShadowedRoute` with one case per row, calling `NoteShadowedRoute` with the route and a `DiscoveryRequest` per request; it fails to compile because neither the method nor `ErrShadowedDocumentation` exists.
+  - GREEN: exported `ErrShadowedDocumentation` and `(*Handler).NoteShadowedRoute`; the on/off, method and prefix checks first, then the lookup (a page or the index, not a 404), then the once-per-route set under a mutex, capped at 256, and the note through `isReporting`/`callHook` with a nil problem.
+  - Murphy rows (internal tests): no hook (nothing built), a nil `*Handler` panics naming the method, a panicking hook, more than 256 conflicting routes (at most 256 notes), and 100 concurrent first requests to one route (one note) under `-race`.
+  - REFACTOR: share the path checks with `RespondDiscovery` (Extract Function if they duplicate), then /simplify.
+- [x] 8.18 Report shadowed documentation from gin, and keep the HEAD behavior (gin-adapter / Scenario: Discovery through gin, the HEAD row; Scenario: Shadowed documentation through gin); verify `go test -race -run 'TestMiddleware_Discovery|TestMiddleware_Shadowed'` passes
+  - The HEAD row: the review's reproducing test, turned into a row that asserts the specified behavior (status 200, `application/json`, empty body). It passes before any change; record that and keep it as a regression row.
+  - RED: `TestMiddleware_Shadowed` with one case per row; the "1" rows fail because no note is sent.
+  - GREEN: in `Middleware`, when discovery is on and `c.FullPath()` is non-empty, call `NoteShadowedRoute` with the pattern and the request.
+  - Code review claim (unverified): a global middleware before `Middleware` that calls `c.Status(...)` stops discovery being served. Write the test first (rule 8). If it fails as claimed, document the ordering rule (install `Middleware` first) in the godoc and README and keep the test; if it passes, drop the claim and record that in design D5.
+- [x] 8.19 Add the fiber discovery middleware (fiber-adapter / Scenario: Shadowed documentation through fiber; Scenario: Discovery through fiber, the HEAD row; Scenario: Invalid options fail at construction, the discovery middleware row); verify `go test -race -run 'TestDiscovery_Shadowed|TestErrorHandler_Discovery|TestErrorHandler_InvalidOptions'` passes in `fiberprblm`
+  - RED: the rows fail to compile because `fiberprblm.Discovery` doesn't exist. The HEAD row passes already (verified during the review); keep it as a regression row.
+  - GREEN: `Discovery(opts ...prblm.Option) fiber.Handler` builds its handler with `prblm.NewHandler(opts...)`, calls `c.Next()`, reports `c.Route().Path` to `NoteShadowedRoute` when `c.Matched()`, and returns the error of `c.Next()` unchanged.
+  - REFACTOR: share the `DiscoveryRequest` building with `serveDiscovery` (Extract Function), then /simplify.
+- [x] 8.20 Document shadowed documentation: the `ErrShadowedDocumentation` and `NoteShadowedRoute` godoc with the reasons; the `OnError` godoc (a note can arrive on a request that succeeded, with no answered error after it); the gin `Middleware` godoc (the HEAD behavior and the note); `fiberprblm.Discovery` godoc and `ExampleDiscovery`; README "Discovering problem types" (the conflict, the note, net/http documented only) and the framework-differences table (a row for reporting shadowed documentation); CHANGELOG; verify `go test -run Example` passes in all modules and every README code block is mirrored by a compiling Example
+- [x] 8.21 Verify the review-findings additions end to end: the parity test still passes byte for byte; `go tool cover -func` covers every branch of `NoteShadowedRoute`, the gin report and the fiber `Discovery` middleware; diagnostics, vet, lint, `-race` and `GOWORK=off` are clean in all four modules
+
 ## Workflow follow-up
 
-- Run `/opsx:verify add-problem-types`, then archive.
+- Run `/opsx:verify add-problem-types` again.
+- Merge PR #3 (`feat/problem-types`) into `main` before archiving, so the archived `tasks.md` shows every task done.
+- Then archive.
 - Implement `add-mapper-plugins` next. Its release slice tags the adapter API this change introduces.

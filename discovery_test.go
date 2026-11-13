@@ -1,10 +1,13 @@
 package prblm_test
 
 import (
+	"context"
+	"errors"
 	"io"
 	"maps"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -302,6 +305,49 @@ func TestDiscovery_Unknown(t *testing.T) {
 
 			if rec.Code != http.StatusNotFound || rec.Header().Get("Content-Type") != problemJSONType || m["title"] != "Not Found" {
 				t.Errorf("response %d %q %v, want a 404 problem titled Not Found", rec.Code, rec.Header().Get("Content-Type"), m)
+			}
+
+			if calls := r.recorded(); len(calls) != 0 {
+				t.Errorf("hook calls = %+v, want none", calls)
+			}
+		})
+	}
+}
+
+// type-discovery / Scenario: Discovery problems never reach the hook.
+func TestDiscovery_SilentHook(t *testing.T) {
+	t.Parallel()
+
+	const doc = "/v1/api/probs/contracts/blacklisted-supplier"
+
+	panicking := func(context.Context, *prblm.Problem) { panic("enricher") }
+	unencodable := func(_ context.Context, p *prblm.Problem) { _ = p.Set("bad", make(chan int)) }
+	badType := func(_ context.Context, p *prblm.Problem) { p.Type = "Bad Type" }
+
+	tests := []struct {
+		enricher func(context.Context, *prblm.Problem)
+		name     string
+		method   string
+		path     string
+		status   int
+	}{
+		{name: "panicking enricher on a 404", enricher: panicking, method: http.MethodGet, path: "/v1/api/probs/contracts/unknown", status: http.StatusNotFound},
+		{name: "panicking enricher on a 405", enricher: panicking, method: http.MethodPost, path: doc, status: http.StatusMethodNotAllowed},
+		{name: "unencodable extension", enricher: unencodable, method: http.MethodGet, path: "/v1/api/probs/contracts/unknown", status: http.StatusInternalServerError},
+		{name: "invalid type", enricher: badType, method: http.MethodGet, path: "/v1/api/probs/contracts/unknown", status: http.StatusNotFound},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			var r recorder
+
+			h := documented(prblm.OnError(r.hook), prblm.WithEnrichers(tt.enricher))
+			rec := discover(t, h, tt.method, tt.path, nil)
+
+			if rec.Code != tt.status {
+				t.Errorf("status = %d, want %d", rec.Code, tt.status)
 			}
 
 			if calls := r.recorded(); len(calls) != 0 {
@@ -723,8 +769,8 @@ func TestDiscovery_Concurrent(t *testing.T) {
 	wg.Wait()
 }
 
-// Murphy row, as for Wrap, Write and Recover: Discovery and DiscoveryPath
-// on a nil *Handler panic where they are called, naming the mistake, rather
+// Murphy row, as for Wrap, Write and Recover: Discovery, DiscoveryPath and
+// RespondDiscovery on a nil *Handler panic where they are called, naming the mistake, rather
 // than a nil dereference inside a request.
 func TestDiscovery_NilHandler(t *testing.T) {
 	t.Parallel()
@@ -732,8 +778,10 @@ func TestDiscovery_NilHandler(t *testing.T) {
 	var h *prblm.Handler
 
 	tests := map[string]func(){
-		"Discovery":     func() { h.Discovery() },
-		"DiscoveryPath": func() { h.DiscoveryPath() },
+		"Discovery":         func() { h.Discovery() },
+		"DiscoveryPath":     func() { h.DiscoveryPath() },
+		"RespondDiscovery":  func() { h.RespondDiscovery(t.Context(), prblm.DiscoveryRequest{}) },
+		"NoteShadowedRoute": func() { h.NoteShadowedRoute(t.Context(), "/", prblm.DiscoveryRequest{}) },
 	}
 
 	for method, call := range tests {
@@ -742,6 +790,309 @@ func TestDiscovery_NilHandler(t *testing.T) {
 
 			if msg := mustPanic(t, call); !strings.Contains(msg, "Handler."+method) || !strings.Contains(msg, "problem handler") {
 				t.Errorf("panic %q does not name Handler.%s and the problem handler", msg, method)
+			}
+		})
+	}
+}
+
+// creditOnly returns a handler with namespace /v1/api/probs and the type
+// out-of-credit registered, plus opts.
+func creditOnly(opts ...prblm.Option) *prblm.Handler {
+	return prblm.NewHandler(append([]prblm.Option{
+		prblm.WithNamespace("/v1/api/probs"),
+		prblm.WithTypes(outOfCredit),
+	}, opts...)...)
+}
+
+// type-discovery / Scenario: Discovery response for a request.
+func TestRespondDiscovery(t *testing.T) {
+	t.Parallel()
+
+	const (
+		doc      = "/v1/api/probs/out-of-credit"
+		docJSON  = `{"type":"/v1/api/probs/out-of-credit","subtype":"out-of-credit","status":403,"title":"Out of credit","description":"Balance too low."}`
+		indexDoc = `{"types":[{"type":"/v1/api/probs/out-of-credit","subtype":"out-of-credit","status":403,"title":"Out of credit"}]}`
+	)
+
+	ask := func(t *testing.T, h *prblm.Handler, method, path, ifNoneMatch string) (prblm.Response, bool) {
+		t.Helper()
+
+		return h.RespondDiscovery(t.Context(), prblm.DiscoveryRequest{
+			Method:      method,
+			Path:        path,
+			Accept:      jsonType,
+			IfNoneMatch: ifNoneMatch,
+		})
+	}
+
+	first, _ := ask(t, creditOnly(), http.MethodGet, doc, "")
+	etag := first.Header.Get("ETag")
+
+	served := []struct {
+		name        string
+		method      string
+		path        string
+		ifNoneMatch string
+		status      int
+		contentType string
+		body        string
+	}{
+		{name: "document", method: http.MethodGet, path: doc, status: http.StatusOK, contentType: jsonType, body: docJSON},
+		{name: "head", method: http.MethodHead, path: doc, status: http.StatusOK, contentType: jsonType},
+		{name: "index", method: http.MethodGet, path: "/v1/api/probs", status: http.StatusOK, contentType: jsonType, body: indexDoc},
+		{name: "index with slash", method: http.MethodGet, path: "/v1/api/probs/", status: http.StatusOK, contentType: jsonType, body: indexDoc},
+		{name: "revalidated", method: http.MethodGet, path: doc, ifNoneMatch: etag, status: http.StatusNotModified},
+		{name: "unknown", method: http.MethodGet, path: "/v1/api/probs/unknown", status: http.StatusNotFound, contentType: problemJSONType},
+		{name: "escaped sub-type", method: http.MethodGet, path: "/v1/api/probs/out%2Dof-credit", status: http.StatusNotFound, contentType: problemJSONType},
+		{name: "malformed escape", method: http.MethodGet, path: "/v1/api/probs/%zz", status: http.StatusNotFound, contentType: problemJSONType},
+	}
+
+	for _, tt := range served {
+		t.Run("served "+tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			res, ok := ask(t, creditOnly(), tt.method, tt.path, tt.ifNoneMatch)
+
+			if !ok || res.Status != tt.status || res.Header.Get("Content-Type") != tt.contentType {
+				t.Fatalf("result %v, %d %q, want served %d %q", ok, res.Status, res.Header.Get("Content-Type"), tt.status, tt.contentType)
+			}
+
+			assertDiscoveryBody(t, res, tt.path, tt.body)
+		})
+	}
+
+	notServed := []struct {
+		handler *prblm.Handler
+		name    string
+		method  string
+		path    string
+	}{
+		{name: "post", handler: creditOnly(), method: http.MethodPost, path: doc},
+		{name: "outside the namespace", handler: creditOnly(), method: http.MethodGet, path: "/v1/other/out-of-credit"},
+		{name: "namespace prefix only", handler: creditOnly(), method: http.MethodGet, path: "/v1/api/probsx"},
+		{name: "discovery off", handler: creditOnly(prblm.WithoutDiscovery()), method: http.MethodGet, path: doc},
+		{name: "no types", handler: prblm.NewHandler(prblm.WithNamespace("/v1/api/probs")), method: http.MethodGet, path: doc},
+	}
+
+	for _, tt := range notServed {
+		t.Run("not served "+tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			if res, ok := ask(t, tt.handler, tt.method, tt.path, ""); ok {
+				t.Errorf("result %d %s, want not for discovery", res.Status, res.Body)
+			}
+		})
+	}
+}
+
+// shadowRequest is one request an application route answers, reported to
+// NoteShadowedRoute.
+type shadowRequest struct {
+	route, method, path string
+}
+
+// noteShadowed reports every request in reqs to h.NoteShadowedRoute.
+func noteShadowed(t *testing.T, h *prblm.Handler, reqs ...shadowRequest) {
+	t.Helper()
+
+	for _, req := range reqs {
+		h.NoteShadowedRoute(t.Context(), req.route, prblm.DiscoveryRequest{Method: req.method, Path: req.path})
+	}
+}
+
+// assertShadowNotes checks that the hook received notes notes, each
+// wrapping ErrShadowedDocumentation, with no problem, and naming one of the
+// routes of reqs, each route at most once.
+func assertShadowNotes(t *testing.T, calls []hookCall, notes int, reqs ...shadowRequest) {
+	t.Helper()
+
+	if len(calls) != notes {
+		t.Fatalf("hook calls = %+v, want %d notes", calls, notes)
+	}
+
+	named := map[string]bool{}
+
+	for _, call := range calls {
+		if !errors.Is(call.err, prblm.ErrShadowedDocumentation) || call.status != 0 {
+			t.Errorf("note %v (status %d), want one wrapping ErrShadowedDocumentation without a problem", call.err, call.status)
+		}
+
+		route := ""
+
+		for _, req := range reqs {
+			if strings.Contains(call.err.Error(), "route "+strconv.Quote(req.route)) {
+				route = req.route
+			}
+		}
+
+		if route == "" || named[route] {
+			t.Errorf("note %q names no route of %+v, or one already named", call.err, reqs)
+		}
+
+		named[route] = true
+	}
+}
+
+// type-discovery / Scenario: Shadowed documentation.
+func TestNoteShadowedRoute(t *testing.T) {
+	t.Parallel()
+
+	const doc = "/v1/api/probs/out-of-credit"
+
+	get := func(route, path string) shadowRequest {
+		return shadowRequest{route: route, method: http.MethodGet, path: path}
+	}
+
+	tests := []struct {
+		name     string
+		options  []prblm.Option
+		requests []shadowRequest
+		notes    int
+	}{
+		// Examples: noted.
+		{name: "noted get", requests: []shadowRequest{get(doc, doc)}, notes: 1},
+		{name: "noted get twice", requests: []shadowRequest{get(doc, doc), get(doc, doc)}, notes: 1},
+		{name: "noted head", requests: []shadowRequest{{route: doc, method: http.MethodHead, path: doc}}, notes: 1},
+		{name: "noted index", requests: []shadowRequest{get("/v1/api/probs", "/v1/api/probs")}, notes: 1},
+		{
+			name:     "noted pattern then unknown",
+			requests: []shadowRequest{get("/v1/api/probs/:name", doc), get("/v1/api/probs/:name", "/v1/api/probs/unknown")},
+			notes:    1,
+		},
+		{name: "noted two routes", requests: []shadowRequest{get(doc, doc), get("/v1/api/probs", "/v1/api/probs")}, notes: 2},
+		// Examples: not noted.
+		{name: "not noted unknown", requests: []shadowRequest{get("/v1/api/probs/:name", "/v1/api/probs/unknown")}},
+		{name: "not noted outside", requests: []shadowRequest{get("/v1/other/:name", "/v1/other/out-of-credit")}},
+		{name: "not noted post", requests: []shadowRequest{{route: doc, method: http.MethodPost, path: doc}}},
+		{name: "not noted discovery off", options: []prblm.Option{prblm.WithoutDiscovery()}, requests: []shadowRequest{get(doc, doc)}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			var r recorder
+
+			noteShadowed(t, creditOnly(append(tt.options, prblm.OnError(r.hook))...), tt.requests...)
+			assertShadowNotes(t, r.recorded(), tt.notes, tt.requests...)
+		})
+	}
+}
+
+// Murphy rows: a panicking hook, more conflicting routes than the cap, and
+// concurrent first requests to one route.
+func TestNoteShadowedRoute_Faulty(t *testing.T) {
+	t.Parallel()
+
+	const doc = "/v1/api/probs/out-of-credit"
+
+	t.Run("panicking hook", func(t *testing.T) {
+		t.Parallel()
+
+		calls := 0
+		h := creditOnly(prblm.OnError(func(context.Context, error, *prblm.Problem) {
+			calls++
+
+			panic("hook")
+		}))
+
+		noteShadowed(t, h, shadowRequest{route: doc, method: http.MethodGet, path: doc})
+
+		if calls != 1 {
+			t.Errorf("hook calls = %d, want 1, its panic contained", calls)
+		}
+	})
+
+	t.Run("more routes than the cap", func(t *testing.T) {
+		t.Parallel()
+
+		var r recorder
+
+		h := creditOnly(prblm.OnError(r.hook))
+		for i := range 300 {
+			noteShadowed(t, h, shadowRequest{route: doc + "/" + strconv.Itoa(i), method: http.MethodGet, path: doc})
+		}
+
+		if got := len(r.recorded()); got != 256 {
+			t.Errorf("notes = %d, want 256, the cap", got)
+		}
+	})
+
+	t.Run("concurrent first requests", func(t *testing.T) {
+		t.Parallel()
+
+		var (
+			r  recorder
+			wg sync.WaitGroup
+		)
+
+		h := creditOnly(prblm.OnError(r.hook))
+
+		for range 100 {
+			wg.Go(func() { noteShadowed(t, h, shadowRequest{route: doc, method: http.MethodGet, path: doc}) })
+		}
+
+		wg.Wait()
+
+		if got := len(r.recorded()); got != 1 {
+			t.Errorf("notes = %d, want 1", got)
+		}
+	})
+}
+
+// assertDiscoveryBody checks the body of a served discovery response: a
+// problem names path as its instance, and any other body is body, which is
+// empty for a HEAD or a 304.
+func assertDiscoveryBody(t *testing.T, res prblm.Response, path, body string) {
+	t.Helper()
+
+	if res.Header.Get("Content-Type") == problemJSONType {
+		if m := decodeMembers(t, res.Body); m["instance"] != path {
+			t.Errorf("problem %s, want the instance %q", res.Body, path)
+		}
+
+		return
+	}
+
+	if string(res.Body) != body {
+		t.Errorf("body = %q, want %q", res.Body, body)
+	}
+}
+
+// type-discovery / Scenario: Pages rendered on first use.
+func TestDiscovery_FirstUse(t *testing.T) {
+	t.Parallel()
+
+	for _, requests := range []int{1, 100} {
+		t.Run(strconv.Itoa(requests), func(t *testing.T) {
+			t.Parallel()
+
+			h := creditOnly()
+
+			var (
+				wg        sync.WaitGroup
+				responses = make([]prblm.Response, requests)
+			)
+
+			for i := range requests {
+				wg.Go(func() {
+					responses[i], _ = h.RespondDiscovery(t.Context(), prblm.DiscoveryRequest{
+						Method: http.MethodGet,
+						Path:   "/v1/api/probs/out-of-credit",
+						Accept: jsonType,
+					})
+				})
+			}
+
+			wg.Wait()
+
+			first := responses[0]
+			for _, res := range responses {
+				if res.Status != http.StatusOK || string(res.Body) != string(first.Body) ||
+					res.Header.Get("ETag") == "" || res.Header.Get("ETag") != first.Header.Get("ETag") {
+					t.Fatalf("response %d %s %q, want 200 with the same body and ETag as %s %q",
+						res.Status, res.Body, res.Header.Get("ETag"), first.Body, first.Header.Get("ETag"))
+				}
 			}
 		})
 	}

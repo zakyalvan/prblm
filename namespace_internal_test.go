@@ -1,7 +1,9 @@
 package prblm
 
 import (
+	"strconv"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -145,5 +147,104 @@ func FuzzIsSubtype(f *testing.F) {
 func BenchmarkIsSubtype(b *testing.B) {
 	for b.Loop() {
 		isSubtype("contracts/blacklisted-supplier")
+	}
+}
+
+// Design D2, task 8.7: a valid sub-type is resolved once per handler, so a
+// later resolution of it allocates nothing, and the cache stays bounded.
+func TestTypeCache_Resolve(t *testing.T) {
+	t.Parallel()
+
+	long := strings.Repeat("x", maxCachedSubtypeLen+1)
+
+	tests := []struct {
+		name     string
+		subtype  string
+		isCached bool
+	}{
+		{name: "short sub-type", subtype: "contracts/unknown", isCached: true},
+		{name: "longest cached sub-type", subtype: strings.Repeat("x", maxCachedSubtypeLen), isCached: true},
+		{name: "too long to cache", subtype: long},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			var c typeCache
+
+			for range 2 {
+				if got, want := c.resolve("/v1/api/probs", tt.subtype), "/v1/api/probs/"+tt.subtype; got != want {
+					t.Errorf("resolve = %q, want %q", got, want)
+				}
+			}
+
+			if _, ok := c.load(tt.subtype); ok != tt.isCached {
+				t.Errorf("cached = %v, want %v", ok, tt.isCached)
+			}
+		})
+	}
+}
+
+// Murphy row for task 8.7: once the cache is full, a new sub-type is still
+// resolved, but not kept, so a consumer that puts request data into types
+// cannot grow it without bound.
+func TestTypeCache_Bounded(t *testing.T) {
+	t.Parallel()
+
+	var c typeCache
+
+	for i := range maxCachedSubtypes + 10 {
+		subtype := "s" + strconv.Itoa(i)
+		if got, want := c.resolve("/p", subtype), "/p/"+subtype; got != want {
+			t.Fatalf("resolve = %q, want %q", got, want)
+		}
+	}
+
+	if n := c.len(); n != maxCachedSubtypes {
+		t.Errorf("cached %d sub-types, want the bound %d", n, maxCachedSubtypes)
+	}
+
+	if _, ok := c.load("s" + strconv.Itoa(maxCachedSubtypes)); ok {
+		t.Error("a sub-type past the bound was cached")
+	}
+}
+
+// Murphy row for task 8.7: concurrent requests resolving the same and
+// different sub-types get correct types, and the cache stays bounded.
+func TestTypeCache_Concurrent(t *testing.T) {
+	t.Parallel()
+
+	var (
+		c  typeCache
+		wg sync.WaitGroup
+	)
+
+	for g := range 32 {
+		wg.Go(func() {
+			for i := range 2 * maxCachedSubtypes {
+				subtype := "s" + strconv.Itoa((g*7+i)%(2*maxCachedSubtypes))
+				if got, want := c.resolve("/p", subtype), "/p/"+subtype; got != want {
+					t.Errorf("resolve = %q, want %q", got, want)
+				}
+			}
+		})
+	}
+
+	wg.Wait()
+
+	if n := c.len(); n > maxCachedSubtypes {
+		t.Errorf("cached %d sub-types, want at most %d", n, maxCachedSubtypes)
+	}
+}
+
+// Task 8.7: resolving a cached sub-type allocates nothing.
+//
+//nolint:paralleltest // AllocsPerRun counts allocations process-wide; parallel tests would skew it.
+func TestTypeCache_NoAllocs(t *testing.T) {
+	var c typeCache
+
+	if allocs := testing.AllocsPerRun(100, func() { c.resolve("/v1/api/probs", "contracts/unknown") }); allocs != 0 {
+		t.Errorf("resolving a cached sub-type allocates %v times, want 0", allocs)
 	}
 }

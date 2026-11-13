@@ -55,15 +55,19 @@
 //	// "/v1/api/probs/contracts/blacklisted-supplier"
 //
 // Absolute URIs, absolute paths and about:blank are kept. Any other relative
-// type becomes about:blank, and the [OnError] hook receives a note wrapping
-// [ErrInvalidType]. Types are never built from the request's Host header,
-// which a client controls.
+// type becomes about:blank, titled with the status phrase, and the [OnError]
+// hook receives a note wrapping [ErrInvalidType]. Without a namespace, a
+// relative type is written as given, with the same note. Types are never
+// built from the request's Host header, which a client controls.
 //
 // [DefineType] defines a type once, with its status, title and description,
 // and [Type.New] builds its problems. Registered with [WithTypes], the
 // definitions are documented at their type URLs by [Handler.Discovery],
 // mounted at [Handler.DiscoveryPath]: an HTML page, or JSON for a client
-// that prefers it, and an index at the namespace path.
+// that prefers it, and an index at the namespace path. Framework adapters
+// serve the same responses through [Handler.RespondDiscovery], and report
+// application routes that hide a page through [Handler.NoteShadowedRoute],
+// so the hook receives a note wrapping [ErrShadowedDocumentation].
 //
 // # Safe defaults
 //

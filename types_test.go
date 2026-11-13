@@ -146,21 +146,22 @@ func TestType_New_Nil(t *testing.T) {
 	const safeContract500 = `{"title":"Internal Server Error","status":500,"instance":"/v1/contracts/7"}`
 
 	tests := []struct {
-		name   string
-		fields []prblm.Field
+		name       string
+		definition *prblm.Type
+		fields     []prblm.Field
 	}{
-		{name: "no fields"},
-		{name: "detail", fields: []prblm.Field{prblm.WithDetail("secret")}},
+		{name: "nil, no fields"},
+		{name: "nil, detail", fields: []prblm.Field{prblm.WithDetail("secret")}},
+		{name: "zero value, no fields", definition: &prblm.Type{}},
+		{name: "zero value, detail", definition: &prblm.Type{}, fields: []prblm.Field{prblm.WithDetail("secret")}},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			var undefined *prblm.Type
-
 			h := prblm.NewHandler(prblm.WithNamespace("/v1/api/probs"), prblm.WithMappers(
-				prblm.Is(errContract, func(error) *prblm.Problem { return undefined.New(tt.fields...) }),
+				prblm.Is(errContract, func(error) *prblm.Problem { return tt.definition.New(tt.fields...) }),
 			))
 
 			rec := answer(t, h, errContract)
@@ -185,6 +186,40 @@ func TestType_New_NilReceiver(t *testing.T) {
 
 	if p.Status != http.StatusInternalServerError || p.Detail != "" || p.Type != "" {
 		t.Errorf("problem = %+v, want a bare 500 without detail", *p)
+	}
+}
+
+// problem-types / Scenario: Nil definition accessors.
+func TestType_NilAccessors(t *testing.T) {
+	t.Parallel()
+
+	var undefined *prblm.Type
+
+	tests := []struct {
+		call     func() any
+		expected any
+		name     string
+	}{
+		{name: "Subtype", call: func() any { return undefined.Subtype() }, expected: ""},
+		{name: "Status", call: func() any { return undefined.Status() }, expected: 0},
+		{name: "Title", call: func() any { return undefined.Title() }, expected: ""},
+		{name: "Description", call: func() any { return undefined.Description() }, expected: ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			defer func() {
+				if v := recover(); v != nil {
+					t.Errorf("%s panicked: %v", tt.name, v)
+				}
+			}()
+
+			if got := tt.call(); got != tt.expected {
+				t.Errorf("%s() = %#v, want %#v", tt.name, got, tt.expected)
+			}
+		})
 	}
 }
 
@@ -229,6 +264,8 @@ func TestWithTypes_Validation(t *testing.T) {
 			opts:  []prblm.Option{ns, prblm.WithTypes(a), prblm.WithTypes(a2)},
 			named: `"contracts/blacklisted-supplier"`,
 		},
+		{name: "a zero-value type", opts: []prblm.Option{ns, prblm.WithTypes(&prblm.Type{})}, named: "invalid definition"},
+		{name: "a zero-value type after a valid one", opts: []prblm.Option{ns, prblm.WithTypes(a, &prblm.Type{})}, named: "invalid definition"},
 	}
 
 	for _, tt := range rejected {
