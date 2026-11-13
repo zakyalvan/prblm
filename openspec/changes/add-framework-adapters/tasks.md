@@ -80,21 +80,21 @@
 
 ## 5. Slice: gin Scope and Recovery
 
-- [ ] 5.1 Add `Scope` (gin-adapter / Scenario: Route group scope, Scenario: Degenerate scopes); verify `go test -run TestScope` passes
+- [x] 5.1 Add `Scope` (gin-adapter / Scenario: Route group scope, Scenario: Degenerate scopes); verify `go test -run TestScope` passes
   - RED: route rows and degenerate rows
   - GREEN: `Scope(m...)` with nil filtering and pass-through
   - REFACTOR: /simplify
-- [ ] 5.2 Add `Recovery` working in any order (gin-adapter / Scenario: Recovery placement); verify `go test -run TestRecovery_Placement` passes
+- [x] 5.2 Add `Recovery` working in any order (gin-adapter / Scenario: Recovery placement); verify `go test -run TestRecovery_Placement` passes
   - RED: all five chain rows
   - GREEN: `Recovery(h)` per design D5, writing through `c.Writer`, `c.Abort()`, never `c.Error`
   - REFACTOR: reuse the copy function from 2.1; /simplify
-- [ ] 5.3 Give the hook value and stack (gin-adapter / Scenario: Panic details go to the hook); verify `go test -run TestRecovery_Hook` passes
-- [ ] 5.4 Handle recovery edge cases (gin-adapter / Scenario: Recovery edge cases; Scenario: Nil handler, recovery row); verify `go test -run 'TestRecovery_(Edge|NilHandler)'` passes
+- [x] 5.3 Give the hook value and stack (gin-adapter / Scenario: Panic details go to the hook); verify `go test -run TestRecovery_Hook` passes
+- [x] 5.4 Handle recovery edge cases (gin-adapter / Scenario: Recovery edge cases; Scenario: Nil handler, recovery row); verify `go test -run 'TestRecovery_(Edge|NilHandler)'` passes
   - RED: abort re-panic, partial flush, `EPIPE`, panicking enricher rows; nil handler panic
   - GREEN: committed/broken branch, construction check
   - REFACTOR: /simplify
-- [ ] 5.5 Document `Scope` and `Recovery` (godoc, `ExampleRecovery`, recommendation to replace `gin.Recovery()`); verify `go test -run Example` passes
-- [ ] 5.6 Verify slice 5 end to end (route groups + panics) and check `go tool cover -func` covers `Scope` and every `Recovery` branch; run gopls diagnostics, `-race`, vet, lint, `GOWORK=off`
+- [x] 5.5 Document `Scope` and `Recovery` (godoc, `ExampleRecovery`, recommendation to replace `gin.Recovery()`); verify `go test -run Example` passes
+- [x] 5.6 Verify slice 5 end to end (route groups + panics) and check `go tool cover -func` covers `Scope` and every `Recovery` branch; run gopls diagnostics, `-race`, vet, lint, `GOWORK=off`
 
 ## 6. Slice: fiber ErrorHandler
 

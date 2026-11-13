@@ -58,3 +58,47 @@ func ExampleMiddleware_abort() {
 	// 403 application/problem+json {"title":"Forbidden","status":403,"instance":"/v1/vessels/7"}
 	// 401 application/problem+json {"title":"Unauthorized","status":401,"instance":"/v1/reports"}
 }
+
+func ExampleRecovery() {
+	h := prblm.NewHandler(prblm.OnError(func(_ context.Context, err error, _ *prblm.Problem) {
+		if pe, ok := errors.AsType[*prblm.PanicError](err); ok {
+			fmt.Println("hook:", pe.Value) // log the value and pe.Stack here
+		}
+	}))
+
+	engine := gin.New()
+	engine.Use(ginprblm.Recovery(h), ginprblm.Middleware(h))
+	engine.GET("/v1/vessels/:id", func(*gin.Context) {
+		panic("db password=hunter2")
+	})
+
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/v1/vessels/7", http.NoBody)
+	rec := httptest.NewRecorder()
+	engine.ServeHTTP(rec, req)
+
+	fmt.Println(rec.Code, rec.Body.String())
+	// Output:
+	// hook: db password=hunter2
+	// 500 {"title":"Internal Server Error","status":500,"instance":"/v1/vessels/7"}
+}
+
+func ExampleScope() {
+	errLocked := errors.New("locked")
+
+	engine := gin.New()
+	engine.Use(ginprblm.Middleware(prblm.NewHandler()))
+	engine.Group("/v1/contracts", ginprblm.Scope(prblm.Status(errLocked, http.StatusLocked))).
+		GET("/:id", func(c *gin.Context) { _ = c.Error(errLocked) })
+	engine.GET("/v1/vessels/:id", func(c *gin.Context) { _ = c.Error(errLocked) })
+
+	for _, target := range []string{"/v1/contracts/1", "/v1/vessels/1"} {
+		req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, target, http.NoBody)
+		rec := httptest.NewRecorder()
+		engine.ServeHTTP(rec, req)
+
+		fmt.Println(target, rec.Code)
+	}
+	// Output:
+	// /v1/contracts/1 423
+	// /v1/vessels/1 500
+}

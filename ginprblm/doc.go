@@ -38,6 +38,24 @@
 // Register [Middleware] before middleware that aborts or writes: a header
 // sent before it runs can no longer be replaced.
 //
+// # Route groups
+//
+// [Scope] attaches mappers to the routes of a group only, ahead of the
+// handler's own mappers:
+//
+//	contracts := engine.Group("/v1/contracts", ginprblm.Scope(
+//		prblm.Status(ErrLocked, http.StatusLocked),
+//	))
+//
+// # Panic recovery
+//
+// Recovery is opt-in. [Recovery] turns a panic into the core's safe 500
+// problem and hands the panic value and stack to the OnError hook. Use it
+// instead of gin.Recovery(), before or after [Middleware]:
+//
+//	engine := gin.New()
+//	engine.Use(ginprblm.Recovery(h), ginprblm.Middleware(h))
+//
 // # Safe defaults
 //
 // The problem semantics are the core's, unchanged: an error no mapper

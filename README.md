@@ -239,6 +239,16 @@ Aborts keep working, and the problem still sets the status and `Content-Type`:
 Register `Middleware` before any middleware that aborts or writes. Middleware that runs earlier
 and sends the header first leaves nothing to replace: the error then only reaches the hook.
 
+`ginprblm.Scope(mappers...)` attaches mappers to a route group only. `ginprblm.Recovery(h)` turns
+panics into the safe 500 problem and gives the panic value and stack to the `OnError` hook; use it
+instead of `gin.Recovery()`, before or after `Middleware`:
+
+```go
+engine := gin.New()
+engine.Use(ginprblm.Recovery(h), ginprblm.Middleware(h))
+contracts := engine.Group("/v1/contracts", ginprblm.Scope(prblm.Status(ErrLocked, http.StatusLocked)))
+```
+
 An adapter for fiber is planned as a separate module.
 
 ## Defaults
