@@ -61,7 +61,7 @@ Validation problems SHALL NOT include the rejected value, the Go struct or type 
 | `hunter2`, `SignupRequest`, `12` |
 
 ### Requirement: Pointers use JSON field names
-Each `pointer` SHALL be an RFC 6901 JSON Pointer in URI fragment form, built from the field namespace without the root struct name, with slice indexes and map keys as segments and `~` and `/` escaped.
+Each `pointer` SHALL be an RFC 6901 JSON Pointer in URI fragment form, built from the field namespace without the root struct name, with slice indexes and map keys as segments and `~` and `/` escaped. The module SHALL provide `JSONName`, a tag name function that names fields as `encoding/json` does, including flattened embedded structs; registered on a validator created with `validator.WithTagNameFuncBlankOmit()`, it makes every pointer name the location `encoding/json` decodes the field from.
 
 #### Scenario: Pointer building
 - **Given** a validator that reports JSON tag names
@@ -81,8 +81,36 @@ Each `pointer` SHALL be an RFC 6901 JSON Pointer in URI fragment form, built fro
 | `Config.meta[café]` | `#/meta/caf%C3%A9` |
 | (empty, from validating a single variable) | `#` |
 
+#### Scenario: Embedded structs
+- **Given** a validator created with `validator.WithTagNameFuncBlankOmit()` and the tag name function `validatormap.JSONName`
+- **When** field `name` of the embedded struct `<embedding>` in `Order` fails validation
+- **Then** the entry's pointer is `<pointer>`, the location `encoding/json` decodes the field from
+
+##### Examples:
+| embedding | pointer |
+|-----------|---------|
+| `Base` without a json tag (flattened by `encoding/json`) | `#/name` |
+| `*Base` without a json tag | `#/name` |
+| `Base` with the json tag `base` | `#/base/name` |
+
+#### Scenario: JSON names
+- **When** `validatormap.JSONName` is given the struct field `<field>`
+- **Then** it returns `<name>`
+
+##### Examples:
+| field | name |
+|-------|------|
+| `Email` with the json tag `email,omitempty` | `email` |
+| `Email` with the json tag `,omitempty` | `Email` |
+| `Email` without a json tag | `Email` |
+| `Secret` with the json tag `-` | (empty) |
+| `Dash` with the json tag `-,` | `-` |
+| embedded `Base` without a json tag | (empty) |
+| embedded `Base` with the json tag `base` | `base` |
+| embedded `ID` (a named `string` type) without a json tag | `ID` |
+
 ### Requirement: Field fallback without JSON names
-When the validator reports Go struct field names rather than JSON names, each entry SHALL carry a `field` member holding the namespace without the root struct name, instead of a `pointer`.
+When the validator reports Go struct field names rather than JSON names, each entry SHALL carry a `field` member holding the namespace without the root struct name, instead of a `pointer`. The choice SHALL be made once per problem: when any entry's namespace differs from its Go struct namespace, the validator reports JSON names and every entry carries a `pointer`. A problem SHALL NOT mix `pointer` and `field` entries.
 
 #### Scenario: No tag name function
 - **Given** a validator without a tag name function
@@ -94,6 +122,17 @@ When the validator reports Go struct field names rather than JSON names, each en
 |-----------|-------|
 | `Signup.VesselName` | `{"detail":"failed validation: required","field":"VesselName"}` |
 | `Order.Items[0].Name` | `{"detail":"failed validation: required","field":"Items[0].Name"}` |
+
+#### Scenario: JSON names equal to Go names
+- **Given** a validator that reports JSON tag names
+- **When** fields `<fields>` of `Account` fail validation, where `ID` has the json tag `ID` and `Name` the json tag `name`
+- **Then** the `errors` member is `<errors>`
+
+##### Examples:
+| fields | errors |
+|--------|--------|
+| `ID` and `Name` | `[{"detail":"failed validation: required","pointer":"#/ID"},{"detail":"failed validation: required","pointer":"#/name"}]` |
+| `ID` only | `[{"detail":"failed validation: required","field":"ID"}]` |
 
 ### Requirement: Status, type and title are configurable
 Consumers SHALL be able to set the status (400–499 only) and the type and title of validation problems. An invalid status SHALL panic at construction.
@@ -122,7 +161,7 @@ Consumers SHALL be able to set the status (400–499 only) and the type and titl
 | 0 |
 
 ### Requirement: Translated messages
-Consumers SHALL be able to supply a function that picks a translator from the request context. When it returns a translator, each entry's `detail` SHALL be the translated message. When it is absent, returns nil or panics, the default message SHALL be used.
+Consumers SHALL be able to supply a function that picks a translator from the request context. When it returns a translator, each entry's `detail` SHALL be the translated message. When it is absent, returns nil or panics, the default message SHALL be used. A panic in the function or in a translation SHALL still produce the validation problem, and SHALL be recorded as a `*prblm.PanicError` in the problem's cause, so the handler's `OnError` hook can find it with `errors.As`.
 
 #### Scenario: Translator choices
 - **Given** the validation mapper registered with a translator function that `<translator>`
@@ -135,7 +174,7 @@ Consumers SHALL be able to supply a function that picks a translator from the re
 | returns an Indonesian translator with `min` registered | the Indonesian translation from that translator |
 | returns an English translator with `min` registered | the English translation from that translator |
 | returns nil | `failed validation: min` |
-| panics | `failed validation: min` |
+| panics | `failed validation: min`, and the `OnError` hook finds a `*prblm.PanicError` in the problem |
 | (no translator function) | `failed validation: min` |
 
 ### Requirement: Invalid validator usage is a server error

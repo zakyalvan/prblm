@@ -23,12 +23,12 @@ their own modules in subdirectories, and depend on a released version of the roo
 
 - Tag the root module first. A module that depends on a new core feature is released only after
   the core release it needs, and its `go.mod` requires that version.
-- Then tag the modules in dependency order. `mappers/pgxmap` requires `mappers/gormmap` for its
-  tests only (the gorm pass-through test), so `mappers/gormmap` is tagged before `mappers/pgxmap`'s
-  `go.mod` can require it. The order is: the root module; then `ginprblm`, `fiberprblm`,
-  `mappers/gormmap` and `mappers/validatormap`; then `mappers/pgxmap`.
-- `internal/paritytest` is an unpublished test module. It is never tagged, and it keeps its
-  `replace` directives so that it always compares the adapters in the repository.
+- Then tag the other modules. Each requires only the core, so they can be tagged together, on the
+  same commit.
+- `internal/paritytest` and `internal/plugintest` are unpublished test modules. They are never
+  tagged, and they keep their `replace` directives so that they always test the adapters and the
+  plugins in the repository. Tests that combine plugins (gorm over pgx, pgx over database/sql)
+  belong in `internal/plugintest`, so that no published plugin requires another.
 
 ## Before tagging
 
@@ -38,11 +38,10 @@ their own modules in subdirectories, and depend on a released version of the roo
    ./.github/scripts/check-core-deps.sh
    ./.github/scripts/check-no-fiber.sh . ginprblm mappers/gormmap mappers/pgxmap mappers/validatormap
    ./.github/scripts/check-test-only-deps.sh mappers/gormmap gorm.io/driver/sqlite github.com/mattn/go-sqlite3
-   ./.github/scripts/check-test-only-deps.sh mappers/pgxmap gorm.io/gorm github.com/kartaladev/prblm/mappers/gormmap
    ./.github/scripts/check-test-only-deps.sh mappers/validatormap github.com/go-playground/locales/en \
      github.com/go-playground/locales/id
-   for module in . ginprblm fiberprblm internal/paritytest mappers/gormmap mappers/pgxmap \
-     mappers/validatormap; do
+   for module in . ginprblm fiberprblm internal/paritytest internal/plugintest mappers/gormmap \
+     mappers/pgxmap mappers/validatormap; do
      (cd "$module" && go test -race ./... && go vet ./... && golangci-lint run ./... \
        && GOWORK=off go test ./...) || break
    done
@@ -59,11 +58,9 @@ their own modules in subdirectories, and depend on a released version of the roo
    `fiberprblm` replace the core with `../`, and the modules in `mappers/` with `../..`: remove
    that line and require the tagged core (`go get github.com/kartaladev/prblm@vX.Y.Z` with
    `GOWORK=off`), then run `GOWORK=off go mod tidy` and `GOWORK=off go test -race ./...` against
-   the real tag before tagging them. `mappers/pgxmap` also replaces `mappers/gormmap` with
-   `../gormmap`: remove that line only after `mappers/gormmap` is tagged, and require that tag.
-   Consumers ignore `replace` directives, so a published module that still has one cannot be
-   built. Check with `grep -l '^replace' */go.mod mappers/*/go.mod`, which must list only
-   `internal/paritytest/go.mod`.
+   the real tag before tagging them. Consumers ignore `replace` directives, so a published module
+   that still has one cannot be built. Check with `grep -l '^replace' */go.mod mappers/*/go.mod`,
+   which must list nothing; only the unpublished `internal/*/go.mod` keep their replaces.
 
 ## Tagging
 
@@ -78,20 +75,10 @@ For a module in a subdirectory, use the directory prefix:
 git tag -a ginprblm/v0.1.0 -m "ginprblm v0.1.0"
 git tag -a fiberprblm/v0.1.0 -m "fiberprblm v0.1.0"
 git tag -a mappers/gormmap/v0.1.0 -m "gormmap v0.1.0"
-git tag -a mappers/validatormap/v0.1.0 -m "validatormap v0.1.0"
-git push origin ginprblm/v0.1.0 fiberprblm/v0.1.0 mappers/gormmap/v0.1.0 mappers/validatormap/v0.1.0
-```
-
-Then, in `mappers/pgxmap`, replace the `../gormmap` directive by the tag, commit, and tag that
-commit:
-
-```sh
-(cd mappers/pgxmap && go mod edit -dropreplace github.com/kartaladev/prblm/mappers/gormmap \
-  && GOWORK=off go get github.com/kartaladev/prblm/mappers/gormmap@v0.1.0 && GOWORK=off go mod tidy \
-  && GOWORK=off go test -race ./...)
-git commit -am "build(pgxmap): require the released gormmap"
 git tag -a mappers/pgxmap/v0.1.0 -m "pgxmap v0.1.0"
-git push origin HEAD mappers/pgxmap/v0.1.0
+git tag -a mappers/validatormap/v0.1.0 -m "validatormap v0.1.0"
+git push origin ginprblm/v0.1.0 fiberprblm/v0.1.0 mappers/gormmap/v0.1.0 mappers/pgxmap/v0.1.0 \
+  mappers/validatormap/v0.1.0
 ```
 
 ## Checking the release

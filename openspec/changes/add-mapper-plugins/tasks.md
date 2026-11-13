@@ -126,7 +126,36 @@
 - [ ] 7.2 Transfer `zakyalvan/prblm` to `kartaladev` (done by the repository owner) and point `origin` at `git@github.com:kartaladev/prblm.git`; verify `gh repo view kartaladev/prblm` succeeds and `git push` works
 - [ ] 7.3 Move the CHANGELOG `[Unreleased]` entries to `[0.1.0]` (core, `MergeInto`, `sqlmap`), tag the core `v0.1.0` and push the tag; verify `GOWORK=off go list -m github.com/kartaladev/prblm@v0.1.0` resolves with an empty module cache
 - [ ] 7.4 In `ginprblm`, `fiberprblm`, `mappers/gormmap`, `mappers/pgxmap` and `mappers/validatormap`, remove the core replace, require `v0.1.0` and run `go mod tidy`; verify `GOWORK=off go test -race ./...` passes in each against the real tag, `grep -l replace` finds no published `go.mod`, and CI is green
-- [ ] 7.5 Tag `ginprblm/v0.1.0`, `fiberprblm/v0.1.0`, `mappers/gormmap/v0.1.0` and `mappers/validatormap/v0.1.0` on that commit and push them; then, because `mappers/pgxmap` requires `mappers/gormmap` for its tests, drop its `../gormmap` replace, require `mappers/gormmap@v0.1.0`, commit, and tag `mappers/pgxmap/v0.1.0` (RELEASING.md); verify `GOWORK=off go list -m <module>@v0.1.0` resolves for each
+- [ ] 7.5 Tag `ginprblm/v0.1.0`, `fiberprblm/v0.1.0`, `mappers/gormmap/v0.1.0`, `mappers/pgxmap/v0.1.0` and `mappers/validatormap/v0.1.0` on that commit and push them (no plugin requires another since 8.6); verify `GOWORK=off go list -m <module>@v0.1.0` resolves for each
+
+## 8. Review fixes (PR #6 review and verification)
+
+Done before group 7 continues; 7.1 is re-run in 8.10.
+
+- [x] 8.1 Map gorm's foreign key and check constraint sentinels (gorm-error-mapping / Scenario: Translated constraint violations; Scenario: Degenerate inputs, row `ErrInvalidField`); verify `go test -run 'TestMapper_(ForeignKeyViolated|CheckConstraintViolated|Degenerate)'` passes in `mappers/gormmap`
+  - RED: a real SQLite foreign key violation with `TranslateError: true` and `PRAGMA foreign_keys = ON`; a wrapped `ErrCheckConstraintViolated`; both currently 500
+  - GREEN: two cases and `WithForeignKeyViolated`, `WithCheckConstraintViolated`, same statuses and details as `pgxmap`
+  - REFACTOR: /simplify
+- [x] 8.2 Map 57014 to 504 without Retry-After (pgx-error-mapping / Scenario: Mapped codes, canceled statements; Scenario: Retry-After header, row `57014`); verify `go test -run 'TestMapper_(Codes|RetryAfter)'` passes
+- [x] 8.3 Reject malformed SQLSTATE codes in `WithCode` (pgx-error-mapping / Scenario: Invalid code registration); verify `go test -run TestMapper_CodeOverrideInvalid` passes
+- [x] 8.4 Correct the pgxmap godoc on `pgx.ErrNoRows` (wraps `sql.ErrNoRows` since pgx v5.7.1, so `sqlmap` maps it); verify `go test -run TestMapper_PgxNoRows` in `mappers/pgxmap` (`pgxmap` + `sqlmap` → 404; `sqlmap` is in the core, which `pgxmap` already requires)
+- [x] 8.5 Never mix `pointer` and `field` in one problem (validation-error-mapping / Scenario: JSON names equal to Go names); verify `go test -run TestMapper_NamesEqualGoNames` passes
+  - RED: `Account{ID json:"ID", Name json:"name"}` gives `field` for `ID` and `pointer` for `name`
+  - GREEN: decide once per problem; `location` takes the decision
+  - REFACTOR: /simplify
+- [x] 8.6 Move the gorm cross-plugin tests to the unpublished `internal/plugintest` module (gorm-error-mapping / Scenario: gorm without translation; Scenario: Translated error with a constraint problem); verify `go test ./...` passes there, `GOWORK=off go mod why -m gorm.io/gorm` in `mappers/pgxmap` reports it unneeded, and CI and RELEASING.md no longer chain the pgxmap tag behind gormmap
+  - Characterization, not RED: `TestGorm` resolves the real `postgres.Dialector.Translate` output in both orders. The `gorm mapper, PostgreSQL mapper` row answering 409 instead of the constraint's 422 reproduces the review finding; the fix is the documented order (8.7), not code
+  - Move `gorm_test.go`; drop `Example_gorm` (it showed the wrong order; the godoc shows the right one); drop the gorm requirements and the second replace from `mappers/pgxmap/go.mod`
+- [x] 8.7 Document the driver-mapper-first order in the gormmap and pgxmap godoc and the README; verify every snippet matches a compiling example
+- [x] 8.8 Build pointers for embedded structs with `JSONName` (validation-error-mapping / Scenario: Embedded structs, Scenario: JSON names); verify `go test -run 'TestJSONName|TestMapper_EmbeddedStruct'` passes
+  - RED: `TestJSONName` against a stub, and the embedded rows through a real validator with `WithTagNameFuncBlankOmit()`
+  - GREEN: `JSONName` following `encoding/json`
+  - REFACTOR: use `JSONName` in the examples and README; /simplify
+- [x] 8.9 Record translator panics in the problem's cause (validation-error-mapping / Scenario: Translator choices, row "panics"); verify `go test -run TestMapper_Translator` passes
+  - RED: the `OnError` hook receives the 422 problem but `errors.As(p, &*prblm.PanicError)` fails
+  - GREEN: collect recovered panics as `*prblm.PanicError` and attach them with `prblm.WithCause`
+  - REFACTOR: /simplify
+- [x] 8.10 Re-run 7.1's full verification in every module, including `internal/plugintest`, and check `go tool cover -func` covers the new branches (gormmap's new cases, `WithCode` validation, the per-problem location choice, `JSONName`, the panic cause)
 
 ## Workflow follow-up
 
