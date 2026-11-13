@@ -3,6 +3,7 @@ package ginprblm_test
 import (
 	"context"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -256,33 +257,26 @@ func TestMiddleware_EndToEnd(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL+"/v1/vessels/7?token=abc", http.NoBody)
-			req.RequestURI = ""
-
+			req := get(t, srv.URL+"/v1/vessels/7?token=abc")
 			if tt.accept != "" {
 				req.Header.Set("Accept", tt.accept)
 			}
 
-			res, err := srv.Client().Do(req)
-			if err != nil {
-				t.Fatalf("request: %v", err)
+			rec := do(t, srv, req)
+
+			if rec.Code != http.StatusNotFound {
+				t.Errorf("status = %d, want 404", rec.Code)
 			}
 
-			defer func() { _ = res.Body.Close() }()
-
-			if res.StatusCode != http.StatusNotFound {
-				t.Errorf("status = %d, want 404", res.StatusCode)
-			}
-
-			if ct := res.Header.Get("Content-Type"); ct != tt.contentType {
+			if ct := rec.Header().Get("Content-Type"); ct != tt.contentType {
 				t.Errorf("Content-Type = %q, want %q", ct, tt.contentType)
 			}
 
-			if vary := res.Header.Get("Vary"); vary != "Accept" {
+			if vary := rec.Header().Get("Vary"); vary != "Accept" {
 				t.Errorf("Vary = %q, want Accept", vary)
 			}
 
-			if p := parse(t, res); p.Instance != "/v1/vessels/7" {
+			if p := parseRecorded(t, rec); p.Instance != "/v1/vessels/7" {
 				t.Errorf("instance = %q, want /v1/vessels/7", p.Instance)
 			}
 		})
@@ -297,16 +291,35 @@ func TestMiddleware_NilRecordedError(t *testing.T) {
 	engine := gin.New()
 	engine.Use(ginprblm.Middleware(prblm.NewHandler()))
 	engine.GET("/x", func(c *gin.Context) {
+		c.Status(http.StatusAccepted)
 		c.Errors = append(c.Errors, &gin.Error{Err: nil, Type: gin.ErrorTypePrivate})
 	})
 
 	rec := serve(t, engine, get(t, "/x"))
 
-	if rec.Code != http.StatusOK {
-		t.Errorf("status = %d, want 200", rec.Code)
+	if rec.Code != http.StatusAccepted {
+		t.Errorf("status = %d, want the recorded 202", rec.Code)
 	}
 
 	if ct := rec.Header().Get("Content-Type"); ct != "" {
 		t.Errorf("Content-Type = %q, want none", ct)
+	}
+}
+
+// Design D3 failure mode: a panic unwinding through the middleware must
+// leave gin's own writer in place, so recovery middleware outside it can
+// still send its status.
+func TestMiddleware_PanicPassesThrough(t *testing.T) {
+	t.Parallel()
+
+	engine := gin.New()
+	engine.Use(gin.CustomRecoveryWithWriter(io.Discard, func(c *gin.Context, _ any) {
+		c.AbortWithStatus(http.StatusInternalServerError)
+	}))
+	engine.Use(ginprblm.Middleware(prblm.NewHandler()))
+	engine.GET("/x", func(*gin.Context) { panic("boom") })
+
+	if rec := serve(t, engine, get(t, "/x")); rec.Code != http.StatusInternalServerError {
+		t.Errorf("status = %d, want 500 from the outer recovery", rec.Code)
 	}
 }

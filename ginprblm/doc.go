@@ -26,6 +26,18 @@
 // recorded error with the handler, so mappers, enrichers, the OnError hook
 // and content negotiation behave exactly as with net/http.
 //
+// # Aborts
+//
+// gin's aborts send the status at once. [Middleware] holds it back, so an
+// abort still gets a complete problem: c.AbortWithError(403, err) answers
+// with err resolved by the handler, using 403 only when no mapper
+// recognizes err, and c.AbortWithStatus(401) answers with an about:blank
+// 401 problem. Responses with a body, and statuses below 400, are sent as
+// written.
+//
+// Register [Middleware] before middleware that aborts or writes: a header
+// sent before it runs can no longer be replaced.
+//
 // # Safe defaults
 //
 // The problem semantics are the core's, unchanged: an error no mapper

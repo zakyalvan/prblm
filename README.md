@@ -213,8 +213,33 @@ headers, body) without writing it. Framework adapters copy that response to thei
 every framework produces the same output. `Response.MergeInto` merges the problem headers into
 the headers already set on the framework's response by the same rules as the net/http adapter:
 problem headers replace existing ones, `Vary` keeps the existing field names and adds `Accept`,
-and a `Cache-Control` the handler set is kept. Adapters for gin and fiber are planned as separate
-modules.
+and a `Cache-Control` the handler set is kept.
+
+### gin
+
+`github.com/kartaladev/prblm/ginprblm` turns errors recorded with `c.Error` into problems:
+
+```go
+engine := gin.New()
+engine.Use(ginprblm.Middleware(h))
+engine.GET("/v1/vessels/:id", func(c *gin.Context) {
+	_ = c.Error(ErrVesselNotFound) // written as a 404 problem
+})
+```
+
+Aborts keep working, and the problem still sets the status and `Content-Type`:
+
+- `c.AbortWithError(403, err)`: the abort status is a hint, used only when no mapper or
+  self-describing error recognizes `err`. The error's text is never sent.
+- `c.AbortWithStatus(401)`, or a status of 400 or above with no body: an `about:blank` problem
+  for that status.
+- Statuses below 400, and responses with a body (`c.JSON`, `c.AbortWithStatusJSON`), are sent
+  unchanged; a recorded error then only reaches the `OnError` hook.
+
+Register `Middleware` before any middleware that aborts or writes. Middleware that runs earlier
+and sends the header first leaves nothing to replace: the error then only reaches the hook.
+
+An adapter for fiber is planned as a separate module.
 
 ## Defaults
 

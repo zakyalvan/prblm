@@ -3,6 +3,8 @@ package ginprblm_test
 import (
 	"context"
 	"errors"
+	"io"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -11,6 +13,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/kartaladev/prblm"
+	"github.com/kartaladev/prblm/ginprblm"
 )
 
 var (
@@ -86,4 +89,64 @@ func parseRecorded(t *testing.T, rec *httptest.ResponseRecorder) *prblm.Problem 
 	t.Helper()
 
 	return parse(t, rec.Result())
+}
+
+// do sends req to srv and returns the response as a recorder, with the
+// body read and closed.
+func do(t *testing.T, srv *httptest.Server, req *http.Request) *httptest.ResponseRecorder {
+	t.Helper()
+
+	req.RequestURI = ""
+
+	res, err := srv.Client().Do(req)
+	if err != nil {
+		t.Fatalf("request: %v", err)
+	}
+
+	defer func() { _ = res.Body.Close() }()
+
+	rec := httptest.NewRecorder()
+	maps.Copy(rec.Header(), res.Header)
+	rec.Code = res.StatusCode
+
+	if _, err := io.Copy(rec.Body, res.Body); err != nil {
+		t.Fatalf("reading body: %v", err)
+	}
+
+	return rec
+}
+
+// assertHook checks that the hook was called once with an error matching
+// want, or not at all for a nil want.
+func assertHook(t *testing.T, hook *hookRecorder, want error) {
+	t.Helper()
+
+	got := hook.received()
+
+	switch {
+	case want == nil && len(got) != 0:
+		t.Errorf("hook received %v, want no call", got)
+	case want != nil && (len(got) != 1 || !errors.Is(got[0], want)):
+		t.Errorf("hook received %v, want one call with %v", got, want)
+	}
+}
+
+// newEngine returns an engine that uses Middleware, with a problem handler
+// built from opts, and serves handler at GET /x.
+func newEngine(handler gin.HandlerFunc, opts ...prblm.Option) *gin.Engine {
+	engine := gin.New()
+	engine.Use(ginprblm.Middleware(prblm.NewHandler(opts...)))
+	engine.GET("/x", handler)
+
+	return engine
+}
+
+// fetch serves engine over a real server for the test and sends GET path.
+func fetch(t *testing.T, engine *gin.Engine, path string) *httptest.ResponseRecorder {
+	t.Helper()
+
+	srv := httptest.NewServer(engine)
+	t.Cleanup(srv.Close)
+
+	return do(t, srv, get(t, srv.URL+path))
 }

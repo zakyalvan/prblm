@@ -30,31 +30,39 @@
 
 ## 3. Slice: gin abort semantics (deferred-header writer, once the early commit is proven)
 
-- [ ] 3.1 Prove that gin commits the response header on abort before deciding to build the deferred writer (CLAUDE.md rule 8; design D3); verify `go test -run TestGinAbort_CommitsHeaderEarly` FAILS against a plain middleware, and record the failing output in the task notes
+- [x] 3.1 Prove that gin commits the response header on abort before deciding to build the deferred writer (CLAUDE.md rule 8; design D3); verify `go test -run TestGinAbort_CommitsHeaderEarly` FAILS against a plain middleware, and record the failing output in the task notes
   - RED: `TestGinAbort_CommitsHeaderEarly` with a middleware that, after `c.Next()`, sets `Content-Type: application/problem+json` and writes a 404 problem body; handler rows `c.AbortWithStatus(401)` and `c.AbortWithError(403, ErrX)`, using `httptest.NewRecorder` and an `httptest.Server`; assert the client sees status 404 and `Content-Type: application/problem+json`
   - Expected: the test fails (client sees 401/403 and no problem `Content-Type`), which proves the defect and gates tasks 3.2 onward
   - If the test passes instead: the claim is not confirmed. Stop the slice, drop the deferred writer (D3 and tasks 3.2 and 3.7), and re-plan the slice with `/opsx:update` before continuing
   - The test stays in the suite and later asserts the fixed behavior through `Middleware`
-- [ ] 3.2 Record instead of committing on `WriteHeader`/`WriteHeaderNow` (design D3); verify `go test -run TestDeferredWriter_Record` passes
+  - **Proof recorded (gin v1.12.0):** `cd ginprblm && go test -run TestGinAbort_CommitsHeaderEarly -v ./...` failed against `plainMiddleware` in `ginprblm/abort_test.go`:
+    ```
+    abort_with_status/recorder: status = 401, want 404
+    abort_with_error/recorder:  status = 403, want 404
+    abort_with_status/server:   status = 401, want 404; Content-Type = "text/plain; charset=utf-8", want application/problem+json
+    abort_with_error/server:    status = 403, want 404; Content-Type = "text/plain; charset=utf-8", want application/problem+json
+    ```
+    D3 is confirmed; slice 3 proceeds with the deferred writer.
+- [x] 3.2 Record instead of committing on `WriteHeader`/`WriteHeaderNow` (design D3); verify `go test -run TestDeferredWriter_Record` passes
   - RED: unit test proving `AbortWithStatus(401)` leaves the underlying recorder uncommitted and `Status()` reports 401; fails with gin's writer
   - GREEN: `deferredWriter` embedding `gin.ResponseWriter`, installed before `c.Next()`
   - REFACTOR: /simplify
-- [ ] 3.3 Use the abort status as a hint with mapper precedence (gin-adapter / Scenario: AbortWithError); verify `go test -run TestMiddleware_AbortWithError` passes
+- [x] 3.3 Use the abort status as a hint with mapper precedence (gin-adapter / Scenario: AbortWithError); verify `go test -run TestMiddleware_AbortWithError` passes
   - RED: hint-used, mapper-wins and invalid-hint rows, asserting `Content-Type: application/problem+json`
   - GREEN: `WithStatus(err, recorded)` when recorded is 400 or above
   - REFACTOR: /simplify
-- [ ] 3.4 Turn status-only aborts into problems and pass other statuses through (gin-adapter / Scenario: AbortWithStatus and plain statuses); verify `go test -run TestMiddleware_StatusOnly` passes
+- [x] 3.4 Turn status-only aborts into problems and pass other statuses through (gin-adapter / Scenario: AbortWithStatus and plain statuses); verify `go test -run TestMiddleware_StatusOnly` passes
   - RED: problem rows and pass-through rows (204, 304, 200, JSON 200)
   - GREEN: `errStatusOnly` sentinel path and commit-unchanged path
   - REFACTOR: express the post-`Next` decision as a small, ordered switch (Decompose Conditional); /simplify
-- [ ] 3.5 Keep written bodies and report errors (gin-adapter / Scenario: Body written before or after an error); verify `go test -run TestMiddleware_BodyWritten` passes
+- [x] 3.5 Keep written bodies and report errors (gin-adapter / Scenario: Body written before or after an error); verify `go test -run TestMiddleware_BodyWritten` passes
   - RED: three rows with hook assertions
   - GREEN: committed branch calling `Respond` for the hook only
   - REFACTOR: /simplify
-- [ ] 3.6 Skip disconnected clients (gin-adapter / Scenario: Client went away); verify `go test -run TestMiddleware_Canceled` passes
-- [ ] 3.7 Detect early-committed headers from middleware registered before ours (design D3 failure mode); verify `go test -run TestMiddleware_RegisteredLate` passes: nothing malformed is written and the hook is called
-- [ ] 3.8 Document abort semantics and the registration-order rule in godoc and README; verify `ExampleMiddleware_abort` passes
-- [ ] 3.9 Verify slice 3 end to end and check `go tool cover -func` covers every `deferredWriter` method and every post-`Next` branch; run gopls diagnostics, `-race`, vet, lint, `GOWORK=off`
+- [x] 3.6 Skip disconnected clients (gin-adapter / Scenario: Client went away); verify `go test -run TestMiddleware_Canceled` passes
+- [x] 3.7 Detect early-committed headers from middleware registered before ours (design D3 failure mode); verify `go test -run TestMiddleware_RegisteredLate` passes: nothing malformed is written and the hook is called
+- [x] 3.8 Document abort semantics and the registration-order rule in godoc and README; verify `ExampleMiddleware_abort` passes
+- [x] 3.9 Verify slice 3 end to end and check `go tool cover -func` covers every `deferredWriter` method and every post-`Next` branch; run gopls diagnostics, `-race`, vet, lint, `GOWORK=off`
 
 ## 4. Slice: gin streams and hijacked connections pass through
 
