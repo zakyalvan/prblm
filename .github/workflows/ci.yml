@@ -18,15 +18,17 @@ jobs:
           go-version-file: go.mod
       - name: core has no third-party requirements
         run: ./.github/scripts/check-core-deps.sh
-      - name: fiber stays out of the core and gin graphs
-        run: ./.github/scripts/check-no-fiber.sh . ginprblm
+      - name: fiber stays out of the core, gin and plugin graphs
+        run: ./.github/scripts/check-no-fiber.sh . ginprblm mappers/gormmap
+      - name: test-only drivers stay out of plugin code
+        run: ./.github/scripts/check-test-only-deps.sh mappers/gormmap gorm.io/driver/sqlite github.com/mattn/go-sqlite3
 
   test:
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        module: [., ginprblm, fiberprblm, internal/paritytest]
+        module: [., ginprblm, fiberprblm, internal/paritytest, mappers/gormmap]
     defaults:
       run:
         working-directory: ${{ matrix.module }}
@@ -35,6 +37,8 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version-file: ${{ matrix.module }}/go.mod
+      - name: go.mod is tidy
+        run: GOWORK=off go mod tidy -diff
       - name: vet
         run: go vet ./...
       - name: vet (other platforms)
@@ -54,7 +58,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        module: [., ginprblm, fiberprblm, internal/paritytest]
+        module: [., ginprblm, fiberprblm, internal/paritytest, mappers/gormmap]
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-go@v6

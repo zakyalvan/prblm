@@ -24,30 +24,30 @@
   - GREEN: `WithNotFound`, `WithUnavailable` options; nil options and nil functions ignored
   - REFACTOR: share one override mechanism across cases (Parameterize Function); /simplify
 - [x] 2.5 Write the `sqlmap` godoc (opt-in rationale, the deliberate `ErrTxDone` exclusion, driver-specific not-found errors not covered) with `ExampleMapper`; verify `go test ./mappers/sqlmap -run Example` passes
-- [ ] 2.6 Verify slice 2 end to end (server with `sqlmap` registered answering 404, 503 and fallback 500) and check `go tool cover -func` covers every `sqlmap` match, no-match and override branch; run `go vet`, `golangci-lint`, `go test -race ./...` and `GOWORK=off go test ./...` for the root module; run gopls `go_diagnostics` on changed files
+- [x] 2.6 Verify slice 2 end to end (server with `sqlmap` registered answering 404, 503 and fallback 500) and check `go tool cover -func` covers every `sqlmap` match, no-match and override branch; run `go vet`, `golangci-lint`, `go test -race ./...` and `GOWORK=off go test ./...` for the root module; run gopls `go_diagnostics` on changed files
 
 ## 3. Slice: gormmap module
 
-- [ ] 3.1 Create `mappers/gormmap/go.mod` (requires `gorm.io/gorm` and the core through `replace github.com/kartaladev/prblm => ../..` until the release; `gorm.io/driver/sqlite` for tests), add it to `go.work`, and add a CI job running vet, lint, `go test -race` and `GOWORK=off go test` for it; verify the job passes on an empty package and the root module's dependency check still passes
-- [ ] 3.2 Map record not found to 404 when registered (gorm-error-mapping / Scenario: Registered or not, Scenario: Missing record); verify `go test ./... -run TestMapper_RecordNotFound` in `mappers/gormmap` passes
+- [x] 3.1 Create `mappers/gormmap/go.mod` (requires `gorm.io/gorm` and the core through `replace github.com/kartaladev/prblm => ../..` until the release; `gorm.io/driver/sqlite` for tests), add it to `go.work`, and add a CI job running vet, lint, `go test -race` and `GOWORK=off go test` for it; verify the job passes on an empty package and the root module's dependency check still passes
+- [x] 3.2 Map record not found to 404 when registered (gorm-error-mapping / Scenario: Registered or not, Scenario: Missing record); verify `go test ./... -run TestMapper_RecordNotFound` in `mappers/gormmap` passes
   - RED: rows through a real handler, producing `gorm.ErrRecordNotFound` from a real `First` call on SQLite plus wrapped and look-alike rows
   - GREEN: `Mapper` with `errors.Is(err, gorm.ErrRecordNotFound)`
   - REFACTOR: /simplify
-- [ ] 3.3 Map duplicated key to 409 with translation enabled (gorm-error-mapping / Scenario: Duplicate key with translation enabled); verify `go test -run TestMapper_DuplicatedKey` passes
+- [x] 3.3 Map duplicated key to 409 with translation enabled (gorm-error-mapping / Scenario: Duplicate key with translation enabled); verify `go test -run TestMapper_DuplicatedKey` passes
   - RED: real SQLite unique violation with `TranslateError: true`; body has neither constraint name nor value
   - GREEN: `gorm.ErrDuplicatedKey` case
   - REFACTOR: /simplify
-- [ ] 3.4 Leave other and degenerate errors unmatched (gorm-error-mapping / Scenario: Degenerate inputs; Scenario: gorm without translation, row "gorm mapper only"); verify `go test -run 'TestMapper_(Degenerate|Untranslated)'` passes
+- [x] 3.4 Leave other and degenerate errors unmatched (gorm-error-mapping / Scenario: Degenerate inputs; Scenario: gorm without translation, row "gorm mapper only"); verify `go test -run 'TestMapper_(Degenerate|Untranslated)'` passes
   - RED: nil, `ErrInvalidTransaction`, `ErrInvalidData`, typed-nil rows; untranslated SQLite unique violation reaches the 500 fallback
   - GREEN: confirm the case list
   - REFACTOR: /simplify
-- [ ] 3.5 Add overrides (gorm-error-mapping / Scenario: Override results); verify `go test -run TestMapper_Override` passes
+- [x] 3.5 Add overrides (gorm-error-mapping / Scenario: Override results); verify `go test -run TestMapper_Override` passes
   - RED: typed problem, nil function, nil result, panic rows
   - GREEN: `WithRecordNotFound`, `WithDuplicatedKey`
   - REFACTOR: reuse the override shape from `sqlmap` without sharing code across modules (keep plugins independent); /simplify
-- [ ] 3.6 Verify the root module stays dependency-free (gorm-error-mapping / Scenario: Root module stays dependency-free); verify the CI dependency check passes with `gormmap` in the workspace
-- [ ] 3.7 Write the `gormmap` godoc (`TranslateError: true` requirement, pairing with a driver mapper) with `ExampleMapper`; verify `go test -run Example` passes
-- [ ] 3.8 Verify slice 3 end to end with a real SQLite-backed handler and check `go tool cover -func` covers every `gormmap` branch; run vet, lint, `go test -race` and `GOWORK=off go test` for `mappers/gormmap`; run gopls `go_diagnostics` on changed files
+- [x] 3.6 Verify the root module stays dependency-free (gorm-error-mapping / Scenario: Root module stays dependency-free); verify the CI dependency check passes with `gormmap` in the workspace
+- [x] 3.7 Write the `gormmap` godoc (`TranslateError: true` requirement, pairing with a driver mapper) with `ExampleMapper`; verify `go test -run Example` passes
+- [x] 3.8 Verify slice 3 end to end with a real SQLite-backed handler and check `go tool cover -func` covers every `gormmap` branch; run vet, lint, `go test -race` and `GOWORK=off go test` for `mappers/gormmap`; run gopls `go_diagnostics` on changed files
 
 ## 4. Slice: pgxmap module
 

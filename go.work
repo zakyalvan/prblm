@@ -5,4 +5,5 @@ use (
 	./fiberprblm
 	./ginprblm
 	./internal/paritytest
+	./mappers/gormmap
 )
