@@ -92,16 +92,16 @@ Every slice ends with:
 
 ## 4. Slice: discovery serves type documentation from the core, mounted in net/http
 
-- [ ] 4.1 Turn discovery on only with registered types (type-discovery / Scenario: Discovery state); verify `go test -run TestDiscovery_State` passes
+- [x] 4.1 Turn discovery on only with registered types (type-discovery / Scenario: Discovery state); verify `go test -run TestDiscovery_State` passes
   - RED: every on and off row, asserting `DiscoveryPath()` and the status from `Discovery()`; fails because neither method nor `WithoutDiscovery` exists
   - GREEN: `WithoutDiscovery() Option`, `DiscoveryPath()`, and `Discovery()` returning a handler that answers 404 problems when off
   - REFACTOR: /simplify
-- [ ] 4.2 Pre-render and serve a type's documentation (type-discovery / Scenario: Documentation served, all three tables); verify `go test -race -run TestDiscovery_Documentation` passes
+- [x] 4.2 Pre-render and serve a type's documentation (type-discovery / Scenario: Documentation served, all three tables); verify `go test -race -run TestDiscovery_Documentation` passes
   - RED: every HTML, JSON and malformed-Accept row against `Discovery()` over `httptest`
   - GREEN: `html/template` and JSON pages rendered once in `NewHandler`, plus an HTML-or-JSON negotiator over the existing Accept parser (design D4)
   - REFACTOR: look for Divergent Change between the page rendering and the routing (Split Phase: render at construction, route at request), then /simplify
-- [ ] 4.3 Answer HEAD with headers only (type-discovery / Scenario: HEAD request); verify `go test -run TestDiscovery_Head` passes
-- [ ] 4.4 Serve the index sorted by sub-type with links (type-discovery / Scenario: Index served, Scenario: HTML index links); verify `go test -run TestDiscovery_Index` passes
+- [x] 4.3 Answer HEAD with headers only (type-discovery / Scenario: HEAD request); verify `go test -run TestDiscovery_Head` passes
+- [x] 4.4 Serve the index sorted by sub-type with links (type-discovery / Scenario: Index served, Scenario: HTML index links); verify `go test -run TestDiscovery_Index` passes
   - RED: both JSON rows and both link rows, including the absolute-namespace `href`
   - GREEN: index pages rendered once, from definitions sorted by sub-type
   - REFACTOR: /simplify

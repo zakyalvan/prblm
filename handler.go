@@ -27,6 +27,11 @@ type Handler struct {
 	namespace string
 	// definitions are the non-nil types passed to WithTypes, in order.
 	definitions []*Type
+	// discovery is the rendered documentation of the definitions, or nil
+	// when discovery is off.
+	discovery *discovery
+	// isDiscoveryDisabled is set by WithoutDiscovery.
+	isDiscoveryDisabled bool
 }
 
 // NewHandler returns a handler configured by opts. Nil options are ignored.
@@ -49,6 +54,7 @@ func NewHandler(opts ...Option) *Handler {
 	}
 
 	h.checkTypes()
+	h.discovery = h.newDiscovery()
 
 	return h
 }

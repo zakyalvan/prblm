@@ -125,6 +125,16 @@ func (h *Handler) respondPanic(ctx context.Context, req Request, pe *PanicError)
 // it negotiates the format, encodes p (falling back to the minimal problem)
 // and reports err to the OnError hook with the problem being sent.
 func (h *Handler) respond(ctx context.Context, req Request, err error, p *Problem) Response {
+	res, sent := h.render(ctx, req, p)
+	h.report(ctx, err, sent)
+
+	return res
+}
+
+// render renders p as the response for req: it negotiates the format and
+// encodes p, falling back to the minimal problem when that fails. It
+// returns the response and the problem it carries.
+func (h *Handler) render(ctx context.Context, req Request, p *Problem) (Response, *Problem) {
 	f := negotiateFormat(req.Accept)
 
 	body, ok := h.encode(ctx, f, p)
@@ -136,9 +146,7 @@ func (h *Handler) respond(ctx context.Context, req Request, err error, p *Proble
 		p.finalize()
 	}
 
-	h.report(ctx, err, p)
-
-	return newResponse(p.Status, p.Header, f.mediaType, body)
+	return newResponse(p.Status, p.Header, f.mediaType, body), p
 }
 
 // format is a problem document format the handler can answer with.
