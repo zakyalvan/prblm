@@ -7,8 +7,10 @@ import (
 	"net/http/httptest"
 
 	"github.com/jackc/pgx/v5/pgconn"
+	"gorm.io/gorm"
 
 	"github.com/kartaladev/prblm"
+	"github.com/kartaladev/prblm/mappers/gormmap"
 	"github.com/kartaladev/prblm/mappers/pgxmap"
 )
 
@@ -75,4 +77,23 @@ func ExampleWithCode() {
 	// Output:
 	// 409
 	// {"title":"Conflict","status":409,"detail":"The booking overlaps another one.","instance":"/v1/users"}
+}
+
+// Example_gorm registers the PostgreSQL mapper after the gorm mapper, so a
+// unique violation is answered whether gorm translated it or not.
+func Example_gorm() {
+	h := prblm.NewHandler(prblm.WithMappers(
+		gormmap.Mapper(),
+		pgxmap.Mapper(),
+	))
+
+	// gorm with TranslateError: gorm.ErrDuplicatedKey.
+	post(h, gorm.ErrDuplicatedKey)
+	// gorm without TranslateError: the driver's error.
+	post(h, errDuplicateEmail)
+	// Output:
+	// 409
+	// {"title":"Conflict","status":409,"detail":"The resource conflicts with an existing one.","instance":"/v1/users"}
+	// 409
+	// {"title":"Conflict","status":409,"detail":"The resource conflicts with an existing one.","instance":"/v1/users"}
 }

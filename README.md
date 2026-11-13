@@ -501,6 +501,84 @@ themselves differ:
 | Type documentation | mount `Handler.Discovery()` at `Handler.DiscoveryPath()` | `Middleware` via `engine.Use` serves unclaimed paths | `ErrorHandler` serves route-not-found paths |
 | Reporting shadowed documentation | not observable; documented only | `Middleware` notes it | opt-in `fiberprblm.Discovery(opts...)` via `app.Use` |
 
+## Mapper plugins
+
+Opt-in mappers for errors that most services return from their data and validation layers. Each
+one is a single `Mapper(opts...)` call, does nothing until it is registered, and answers with fixed,
+generic details: no SQL, no row values, no constraint names, no rejected input.
+
+| Package | Install | Maps |
+|---|---|---|
+| `mappers/sqlmap` | part of the core module | `sql.ErrNoRows` → 404, `driver.ErrBadConn` and `sql.ErrConnDone` → 503 |
+| `mappers/gormmap` | `go get github.com/kartaladev/prblm/mappers/gormmap` | `gorm.ErrRecordNotFound` → 404, `gorm.ErrDuplicatedKey` → 409 |
+| `mappers/pgxmap` | `go get github.com/kartaladev/prblm/mappers/pgxmap` | PostgreSQL errors by SQLSTATE: integrity violations → 409/422, retryable conflicts → 409 and capacity errors → 503, with `Retry-After` |
+| `mappers/validatormap` | `go get github.com/kartaladev/prblm/mappers/validatormap` | `validator.ValidationErrors` → 422 with an `errors` member of `{detail, pointer}` entries |
+
+`sqlmap` uses only the standard library, so it lives in the core module. The others are modules of
+their own, so gorm, pgx and the validator never become dependencies of the core.
+
+```go
+h := prblm.NewHandler(prblm.WithMappers(sqlmap.Mapper()))
+// sql.ErrNoRows, wrapped or not:
+// {"title":"Not Found","status":404,"detail":"The requested resource was not found.","instance":"/v1/vessels/7"}
+```
+
+Errors a plugin does not recognize, such as `sql.ErrTxDone`, an unlisted SQLSTATE or a
+`*validator.InvalidValidationError`, go on to later mappers and finally to the safe 500. Every
+case can be replaced with an option (`sqlmap.WithNotFound`, `gormmap.WithDuplicatedKey`,
+`pgxmap.WithConstraint`, `pgxmap.WithCode`, `validatormap.WithStatus`, ...); a function that
+returns nil declines the error:
+
+```go
+pgxmap.Mapper(pgxmap.WithConstraint("users_email_key", func(*pgconn.PgError) *prblm.Problem {
+	return prblm.New(http.StatusConflict,
+		prblm.WithType("https://example.com/probs/email-taken"),
+		prblm.WithTitle("Email already registered"),
+		prblm.WithDetail("Sign in, or use another email address."),
+	)
+}))
+```
+
+### Validation problems
+
+```go
+v := validator.New(validator.WithRequiredStructEnabled())
+v.RegisterTagNameFunc(jsonName) // report JSON names, so pointers can be built
+
+h := prblm.NewHandler(prblm.WithMappers(validatormap.Mapper()))
+// {"title":"Unprocessable Entity","status":422,"detail":"The request is not valid.","instance":"/v1/vessels",
+//  "errors":[{"detail":"failed validation: required","pointer":"#/name"},{"detail":"failed validation: min","pointer":"#/crew"}]}
+```
+
+Without a tag name function, entries carry a `field` (the Go namespace) instead of a pointer, which
+would be wrong. `validatormap.WithTranslator` picks a translator per request; a missing or failing
+translation falls back to `failed validation: <tag>`.
+
+### Combining plugins
+
+Register them in any order; each matches only its own errors. With gorm's `TranslateError` off, gorm
+passes the driver's error through, so put a driver mapper after the gorm mapper:
+
+```go
+h := prblm.NewHandler(prblm.WithMappers(
+	sqlmap.Mapper(),
+	gormmap.Mapper(),
+	pgxmap.Mapper(),
+	validatormap.Mapper(),
+))
+```
+
+### Plugin defaults
+
+| Plugin | Behavior | Default | Change it with |
+|---|---|---|---|
+| all | registration | not active | `prblm.WithMappers(<name>map.Mapper())` |
+| all | detail | a fixed generic sentence | the per-case options |
+| pgxmap | PostgreSQL detail | hidden | `pgxmap.WithDatabaseDetail()`, **which exposes row values and schema names: internal APIs only** |
+| pgxmap | `Retry-After` on 40001, 40P01, 57014, 53300 | 1 second | `pgxmap.WithRetryAfter` |
+| validatormap | status | 422 | `validatormap.WithStatus` (400–499) |
+| validatormap | message | `failed validation: <tag>` | `validatormap.WithTranslator` |
+
 ## Defaults
 
 | Behavior | Default | Why | Change it with |
