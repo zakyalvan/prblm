@@ -25,6 +25,8 @@ type Handler struct {
 	// namespace is the checked namespace set with WithNamespace, without
 	// its trailing slash, or "" for none.
 	namespace string
+	// definitions are the non-nil types passed to WithTypes, in order.
+	definitions []*Type
 }
 
 // NewHandler returns a handler configured by opts. Nil options are ignored.
@@ -32,9 +34,11 @@ type Handler struct {
 // to the request path, and a safe 500 for anything unrecognized. The handler
 // does not change after NewHandler returns and is safe for concurrent use.
 //
-// NewHandler panics when an option is invalid, such as a malformed
-// [WithNamespace]. That is a startup misconfiguration, so it fails when the
-// program starts rather than inside a request.
+// NewHandler panics when an option is invalid: a malformed [WithNamespace],
+// or [WithTypes] with a duplicate sub-type or without a namespace. That is a
+// startup misconfiguration, so it fails when the program starts rather than
+// inside a request. The checks run after all options are applied, so their
+// order does not matter.
 func NewHandler(opts ...Option) *Handler {
 	h := &Handler{builtins: builtins}
 
@@ -43,6 +47,8 @@ func NewHandler(opts ...Option) *Handler {
 			opt(h)
 		}
 	}
+
+	h.checkTypes()
 
 	return h
 }

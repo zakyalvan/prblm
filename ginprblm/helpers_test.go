@@ -21,6 +21,9 @@ var (
 	ErrLocked         = errors.New("locked")
 )
 
+// OutOfCredit is the type definition of the adapter scenarios.
+var OutOfCredit = prblm.DefineType("out-of-credit", http.StatusForbidden, "Out of credit", "")
+
 // hookRecorder records the errors an OnError hook receives, leaving out the
 // notes about consumer mistakes, which the core reports separately.
 type hookRecorder struct {

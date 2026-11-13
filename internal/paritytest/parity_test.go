@@ -22,6 +22,14 @@ var (
 	errBlacklisted    = errors.New("supplier is blacklisted")
 )
 
+// blacklistedSupplier is the one registered type definition.
+var blacklistedSupplier = prblm.DefineType(
+	"contracts/blacklisted-supplier",
+	http.StatusConflict,
+	"Supplier is blacklisted",
+	"The supplier is on the procurement blacklist.",
+)
+
 // returned holds the errors every server raises the same way. A panic and a
 // status hint are raised in each framework's own way, which is what parity
 // is about, so each server handles those cases itself.
@@ -51,11 +59,10 @@ const (
 func newOptions() []prblm.Option {
 	return []prblm.Option{
 		prblm.WithNamespace("/v1/api/probs"),
+		prblm.WithTypes(blacklistedSupplier),
 		prblm.WithMappers(
 			prblm.Status(errVesselNotFound, http.StatusNotFound),
-			prblm.Is(errBlacklisted, func(error) *prblm.Problem {
-				return prblm.New(http.StatusConflict, prblm.WithType("contracts/blacklisted-supplier"))
-			}),
+			prblm.Is(errBlacklisted, func(error) *prblm.Problem { return blacklistedSupplier.New() }),
 		),
 		prblm.WithEnrichers(func(_ context.Context, p *prblm.Problem) { _ = p.Set("trace_id", "t1") }),
 	}
@@ -220,6 +227,7 @@ func TestParity(t *testing.T) {
 		path        string
 		caseName    string
 		accept      string
+		contains    string
 		status      int
 		contentType string
 	}{
@@ -228,7 +236,14 @@ func TestParity(t *testing.T) {
 		{name: "panic under recovery", path: pathVessel, caseName: casePanic, status: http.StatusInternalServerError, contentType: "application/problem+json"},
 		{name: "mapped error as xml", path: pathVessel, caseName: caseMapped, accept: "application/problem+xml", status: http.StatusNotFound, contentType: "application/problem+xml"},
 		{name: "status hint", path: pathVessel, caseName: caseHint, status: http.StatusForbidden, contentType: "application/problem+json"},
-		{name: "resolved type", path: pathContract, caseName: caseBlacklisted, status: http.StatusConflict, contentType: "application/problem+json"},
+		{
+			name:        "resolved type",
+			path:        pathContract,
+			caseName:    caseBlacklisted,
+			contains:    `"type":"/v1/api/probs/contracts/blacklisted-supplier","title":"Supplier is blacklisted"`,
+			status:      http.StatusConflict,
+			contentType: "application/problem+json",
+		},
 	}
 
 	for _, tt := range tests {
@@ -237,8 +252,9 @@ func TestParity(t *testing.T) {
 
 			want := fetch(t, client, servers["net/http"], tt.path, tt.caseName, tt.accept)
 
-			if want.status != tt.status || want.contentType != tt.contentType || want.vary != "Accept" {
-				t.Fatalf("net/http sent %d %q Vary %q, want %d %q Vary Accept", want.status, want.contentType, want.vary, tt.status, tt.contentType)
+			if want.status != tt.status || want.contentType != tt.contentType || want.vary != "Accept" || !strings.Contains(want.body, tt.contains) {
+				t.Fatalf("net/http sent %d %q Vary %q %s, want %d %q Vary Accept containing %s",
+					want.status, want.contentType, want.vary, want.body, tt.status, tt.contentType, tt.contains)
 			}
 
 			for _, name := range []string{"gin", "fiber"} {

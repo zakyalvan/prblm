@@ -76,6 +76,12 @@ func TestMiddleware_InvalidOptions(t *testing.T) {
 			opts:        []prblm.Option{prblm.WithNamespace("v1/api/probs")},
 			named:       "WithNamespace",
 		},
+		{
+			name:        "error middleware with types and no namespace",
+			constructor: ginprblm.Middleware,
+			opts:        []prblm.Option{prblm.WithTypes(OutOfCredit)},
+			named:       "WithTypes",
+		},
 	}
 
 	for _, tt := range tests {

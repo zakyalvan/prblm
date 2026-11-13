@@ -41,3 +41,7 @@ The first release, planned as v0.1.0.
   `contracts/blacklisted-supplier` are resolved under it, absolute URIs and paths are kept, and an
   invalid relative type becomes `about:blank` with a hook note wrapping `ErrInvalidType`. Types are
   never built from the request's `Host` header. `NewHandler` panics on an invalid namespace.
+- `DefineType`, which defines a problem type once (sub-type, status, title and description) as an
+  immutable `Type`, and `Type.New`, which builds problems of that type for mappers. `WithTypes`
+  registers definitions with the handler; a duplicate sub-type or types without a namespace panic
+  in `NewHandler`.

@@ -77,14 +77,18 @@ type Field func(*Problem)
 // be set directly on the returned problem.
 func New(status int, fields ...Field) *Problem {
 	p := &Problem{Status: status}
+	p.apply(fields)
 
+	return p
+}
+
+// apply applies fields to p in order, skipping nil fields.
+func (p *Problem) apply(fields []Field) {
 	for _, f := range fields {
 		if f != nil {
 			f(p)
 		}
 	}
-
-	return p
 }
 
 // WithType sets the type member, a URI reference that identifies the

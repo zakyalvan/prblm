@@ -62,6 +62,7 @@ func TestErrorHandler_InvalidOptions(t *testing.T) {
 		named string
 	}{
 		{name: "relative namespace", opts: []prblm.Option{prblm.WithNamespace("v1/api/probs")}, named: "WithNamespace"},
+		{name: "types and no namespace", opts: []prblm.Option{prblm.WithTypes(OutOfCredit)}, named: "WithTypes"},
 	}
 
 	for _, tt := range tests {

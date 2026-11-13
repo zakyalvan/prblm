@@ -70,25 +70,25 @@ Every slice ends with:
 
 ## 3. Slice: type definitions build problems and register with the handler
 
-- [ ] 3.1 Define types and validate the definitions (problem-types / Scenario: Definition validated); verify `go test -run TestDefineType_Validation` passes
+- [x] 3.1 Define types and validate the definitions (problem-types / Scenario: Definition validated); verify `go test -run TestDefineType_Validation` passes
   - RED: `TestDefineType_Validation` with every accepted and rejected row, asserting panic messages that name `DefineType` and the offending value; fails because `DefineType` doesn't exist
   - GREEN: `Type` with unexported fields, `DefineType` reusing `isSubtype` and `isErrorStatus`, and the read-only accessors
   - REFACTOR: Introduce Parameter Object only if the constructor grows past four parameters; otherwise /simplify
-- [ ] 3.2 Build problems from a definition (problem-types / Scenario: Problem from a definition, Scenario: Each problem is a fresh copy); verify `go test -race -run 'TestType_New'` passes
+- [x] 3.2 Build problems from a definition (problem-types / Scenario: Problem from a definition, Scenario: Each problem is a fresh copy); verify `go test -race -run 'TestType_New'` passes
   - RED: the four field rows, compared as JSON bodies through `Wrap` with namespace `/v1/api/probs`, plus the fresh-copy row
   - GREEN: `(*Type).New(fields ...Field) *Problem`
   - REFACTOR: /simplify
-- [ ] 3.3 Answer a nil definition with the safe 500 (problem-types / Scenario: Nil definition); verify `go test -run TestType_New_Nil` passes
+- [x] 3.3 Answer a nil definition with the safe 500 (problem-types / Scenario: Nil definition); verify `go test -run TestType_New_Nil` passes
   - RED: the two rows; fails with a nil-pointer panic
   - GREEN: a nil-receiver guard returning `New(500)`, with no fields applied, so `WithDetail("secret")` never leaks
   - REFACTOR: /simplify
-- [ ] 3.4 Register definitions and reject duplicates or a missing namespace (problem-types / Scenario: Registration validated); verify `go test -run TestWithTypes_Validation` passes
+- [x] 3.4 Register definitions and reject duplicates or a missing namespace (problem-types / Scenario: Registration validated); verify `go test -run TestWithTypes_Validation` passes
   - RED: every accepted and rejected row, including option order and a nil type
   - GREEN: `WithTypes(types ...*Type) Option` appends. `NewHandler` builds the `types` map after all options and panics as specified (design D3).
   - REFACTOR: look for Long Function in `NewHandler` (Extract Function `validate()`), then /simplify
-- [ ] 3.5 Reject `WithTypes` without a namespace in the adapters (gin-adapter and fiber-adapter / Scenario: Invalid options fail at construction, the `WithTypes` rows); verify the construction tests pass
-- [ ] 3.6 Document `DefineType`, `Type.New` and `WithTypes` (godoc with the reasons, `ExampleDefineType` showing a package-level definition used in `prblm.Is`); verify `go test -run Example` passes
-- [ ] 3.7 Verify slice 3 end to end with a mapper returning `BlacklistedSupplier.New()` through net/http, gin and fiber. Check `go tool cover -func` covers `DefineType`, `Type.New` and the `WithTypes` validation, and run diagnostics, vet, lint, `-race` and `GOWORK=off`.
+- [x] 3.5 Reject `WithTypes` without a namespace in the adapters (gin-adapter and fiber-adapter / Scenario: Invalid options fail at construction, the `WithTypes` rows); verify the construction tests pass
+- [x] 3.6 Document `DefineType`, `Type.New` and `WithTypes` (godoc with the reasons, `ExampleDefineType` showing a package-level definition used in `prblm.Is`); verify `go test -run Example` passes
+- [x] 3.7 Verify slice 3 end to end with a mapper returning `BlacklistedSupplier.New()` through net/http, gin and fiber. Check `go tool cover -func` covers `DefineType`, `Type.New` and the `WithTypes` validation, and run diagnostics, vet, lint, `-race` and `GOWORK=off`.
 
 ## 4. Slice: discovery serves type documentation from the core, mounted in net/http
 

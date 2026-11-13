@@ -325,3 +325,34 @@ func ExampleWithNamespace() {
 	// {"type":"/v1/api/probs/contracts/blacklisted-supplier","status":409,"instance":"/v1/contracts"}
 	// {"type":"https://kartala.id/probs/contracts/blacklisted-supplier","status":409,"instance":"/v1/contracts"}
 }
+
+// BlacklistedSupplier is defined once, at package level, and shared by every
+// mapper that answers with it.
+var BlacklistedSupplier = prblm.DefineType(
+	"contracts/blacklisted-supplier",
+	http.StatusConflict,
+	"Supplier is blacklisted",
+	"The supplier is on the procurement blacklist and cannot be added to a contract.",
+)
+
+func ExampleDefineType() {
+	errBlacklisted := errors.New("supplier is blacklisted")
+
+	h := prblm.NewHandler(
+		prblm.WithNamespace("/v1/api/probs"),
+		prblm.WithTypes(BlacklistedSupplier),
+		prblm.WithMappers(prblm.Is(errBlacklisted, func(error) *prblm.Problem {
+			return BlacklistedSupplier.New(prblm.WithExt("supplier_id", 42))
+		})),
+	)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/v1/contracts", http.NoBody)
+	h.Write(rec, req, fmt.Errorf("add supplier 42: %w", errBlacklisted))
+
+	fmt.Println(rec.Code)
+	fmt.Println(rec.Body.String())
+	// Output:
+	// 409
+	// {"type":"/v1/api/probs/contracts/blacklisted-supplier","title":"Supplier is blacklisted","status":409,"instance":"/v1/contracts","supplier_id":42}
+}
