@@ -2,7 +2,7 @@
 
 ## 1. Scaffolding for slice 1
 
-- [ ] 1.1 Confirm the released core version this change builds on (`add-problem-details-core` archived and tagged); verify `GOWORK=off go list -m github.com/kartaladev/prblm@<tag>` resolves
+- [ ] 1.1 Confirm the core this change builds on works without a tag (`add-problem-details-core` archived; `add-framework-adapters` complete); verify `go build ./...` and `GOWORK=off go test ./...` pass in the root module
 - [ ] 1.2 Create the `mappers/sqlmap` package directory in the root module with a package doc comment; verify `go build ./...` succeeds and `go list -m all` in the root module still shows no third-party module
 
 ## 2. Slice: sqlmap turns database/sql errors into problems (root module)
@@ -28,7 +28,7 @@
 
 ## 3. Slice: gormmap module
 
-- [ ] 3.1 Create `mappers/gormmap/go.mod` (requires the released core and `gorm.io/gorm`; `gorm.io/driver/sqlite` for tests), add it to `go.work`, and add a CI job running vet, lint, `go test -race` and `GOWORK=off go test` for it; verify the job passes on an empty package and the root module's dependency check still passes
+- [ ] 3.1 Create `mappers/gormmap/go.mod` (requires `gorm.io/gorm` and the core through `replace github.com/kartaladev/prblm => ../..` until the release; `gorm.io/driver/sqlite` for tests), add it to `go.work`, and add a CI job running vet, lint, `go test -race` and `GOWORK=off go test` for it; verify the job passes on an empty package and the root module's dependency check still passes
 - [ ] 3.2 Map record not found to 404 when registered (gorm-error-mapping / Scenario: Registered or not, Scenario: Missing record); verify `go test ./... -run TestMapper_RecordNotFound` in `mappers/gormmap` passes
   - RED: rows through a real handler, producing `gorm.ErrRecordNotFound` from a real `First` call on SQLite plus wrapped and look-alike rows
   - GREEN: `Mapper` with `errors.Is(err, gorm.ErrRecordNotFound)`
@@ -51,7 +51,7 @@
 
 ## 4. Slice: pgxmap module
 
-- [ ] 4.1 Create `mappers/pgxmap/go.mod` (requires the released core and `github.com/jackc/pgx/v5`), add it to `go.work` and CI; verify the job passes on an empty package and the root dependency check still passes
+- [ ] 4.1 Create `mappers/pgxmap/go.mod` (requires `github.com/jackc/pgx/v5` and the core through `replace github.com/kartaladev/prblm => ../..` until the release), add it to `go.work` and CI; verify the job passes on an empty package and the root dependency check still passes
 - [ ] 4.2 Map SQLSTATE codes to problems when registered (pgx-error-mapping / Scenario: Registered or not, Scenario: Mapped codes); verify `go test -run TestMapper_Codes` passes
   - RED: one row per mapped code with exact status and detail, built from real `*pgconn.PgError` values wrapped with `fmt.Errorf`; fails because `pgxmap.Mapper` does not exist
   - GREEN: `errors.AsType[*pgconn.PgError]`, nil guard, read-only default table
@@ -86,7 +86,7 @@
 
 ## 5. Slice: validatormap module
 
-- [ ] 5.1 Create `mappers/validatormap/go.mod` (requires the released core, `github.com/go-playground/validator/v10`, `github.com/go-playground/universal-translator`; `github.com/go-playground/locales` for tests), add it to `go.work` and CI; verify the job passes on an empty package and the root dependency check still passes
+- [ ] 5.1 Create `mappers/validatormap/go.mod` (requires `github.com/go-playground/validator/v10`, `github.com/go-playground/universal-translator` and the core through `replace github.com/kartaladev/prblm => ../..` until the release; `github.com/go-playground/locales` for tests), add it to `go.work` and CI; verify the job passes on an empty package and the root dependency check still passes
 - [ ] 5.2 Build JSON Pointers and the field fallback (validation-error-mapping / Scenario: Pointer building, Scenario: No tag name function); verify `go test -run 'TestPointer|TestField'` passes and `go test -fuzz FuzzPointer -fuzztime 30s` never panics
   - RED: every namespace row, using namespaces produced by validating real structs (with and without a tag name function) plus the single-variable row
   - GREEN: unexported tokenizer and RFC 6901 escaping with fragment percent-encoding; `Namespace() == StructNamespace()` fallback
@@ -118,8 +118,16 @@
 ## 6. Release readiness
 
 - [ ] 6.1 Add a "Mapper plugins" section to the README (install per module, registration, defaults table with the `WithDatabaseDetail` warning, combining plugins); verify every snippet is mirrored by a compiling `Example`
-- [ ] 6.2 Extend `RELEASING.md` with the plugin tags (`mappers/gormmap/vX.Y.Z`, `mappers/pgxmap/vX.Y.Z`, `mappers/validatormap/vX.Y.Z`) and the rule that the core is tagged first; verify `GOWORK=off go list -m` resolves each module against local tags in a dry run
+- [ ] 6.2 Extend `RELEASING.md` with the plugin tags (`mappers/gormmap/vX.Y.Z`, `mappers/pgxmap/vX.Y.Z`, `mappers/validatormap/vX.Y.Z`) the rule that the core is tagged first, and the step that removes each published module's replace before its tag; verify `GOWORK=off go list -m` resolves each module against local tags in a dry run
+
+## 7. Release
+
+- [ ] 7.1 Confirm `add-framework-adapters` is archived and every task above is done; run the full verification in every module (`-race`, vet, lint, `GOWORK=off go test ./...`, the root dependency check, cross-platform vet) and verify it passes
+- [ ] 7.2 Transfer `zakyalvan/prblm` to `kartaladev` (done by the repository owner) and point `origin` at `git@github.com:kartaladev/prblm.git`; verify `gh repo view kartaladev/prblm` succeeds and `git push` works
+- [ ] 7.3 Move the CHANGELOG `[Unreleased]` entries to `[0.1.0]` (core, `MergeInto`, `sqlmap`), tag the core `v0.1.0` and push the tag; verify `GOWORK=off go list -m github.com/kartaladev/prblm@v0.1.0` resolves with an empty module cache
+- [ ] 7.4 In `ginprblm`, `fiberprblm`, `mappers/gormmap`, `mappers/pgxmap` and `mappers/validatormap`, remove the core replace, require `v0.1.0` and run `go mod tidy`; verify `GOWORK=off go test -race ./...` passes in each against the real tag, `grep -l replace` finds no published `go.mod`, and CI is green
+- [ ] 7.5 Tag `ginprblm/v0.1.0`, `fiberprblm/v0.1.0`, `mappers/gormmap/v0.1.0`, `mappers/pgxmap/v0.1.0` and `mappers/validatormap/v0.1.0` on that commit and push them; verify `GOWORK=off go list -m <module>@v0.1.0` resolves for each
 
 ## Workflow follow-up
 
-- Archive the change after review and once the plugin modules are tagged.
+- Archive the change after review, once group 7 is done.
