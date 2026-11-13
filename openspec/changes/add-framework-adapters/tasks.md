@@ -98,24 +98,24 @@
 
 ## 6. Slice: fiber ErrorHandler
 
-- [ ] 6.1 Create `fiberprblm/go.mod` (`github.com/kartaladev/prblm/fiberprblm`, `go 1.27`, requiring the pinned fiber v3 minor and the core through `replace github.com/kartaladev/prblm => ../` until the release), add it to `go.work` and the CI matrix; verify `go build ./...` with and without `GOWORK`
-- [ ] 6.2 Render returned errors (fiber-adapter / Scenario: Returned errors, Scenario: Unmapped error text never leaks); verify `go test -race -run TestErrorHandler_Returned` passes using `app.Test`
+- [x] 6.1 Create `fiberprblm/go.mod` (`github.com/kartaladev/prblm/fiberprblm`, `go 1.27`, requiring the pinned fiber v3 minor and the core through `replace github.com/kartaladev/prblm => ../` until the release), add it to `go.work` and the CI matrix; verify `go build ./...` with and without `GOWORK`
+- [x] 6.2 Render returned errors (fiber-adapter / Scenario: Returned errors, Scenario: Unmapped error text never leaks); verify `go test -race -run TestErrorHandler_Returned` passes using `app.Test`
   - RED: four returned-error rows and both leak rows; fails because `ErrorHandler` does not exist
   - GREEN: `ErrorHandler(h)` per design D6 (request facts, `Respond` on `c.Context()`, write status/headers/body)
   - REFACTOR: extract "copy Response to fiber.Ctx" (Extract Function); /simplify
-- [ ] 6.3 Use fiber error codes as hints without messages (fiber-adapter / Scenario: Fiber-generated and handler fiber errors, Scenario: Mapper takes precedence over a fiber error code); verify `go test -run TestErrorHandler_FiberErrors` passes
+- [x] 6.3 Use fiber error codes as hints without messages (fiber-adapter / Scenario: Fiber-generated and handler fiber errors, Scenario: Mapper takes precedence over a fiber error code); verify `go test -run TestErrorHandler_FiberErrors` passes
   - RED: routing rows (404, 405), handler-returned rows, precedence row
   - GREEN: `errors.AsType[*fiber.Error]` then `WithStatus`
   - REFACTOR: /simplify
-- [ ] 6.4 Describe the request from fiber (fiber-adapter / Scenario: Request facts); verify `go test -run TestErrorHandler_RequestFacts` passes
-- [ ] 6.5 Replace buffered bodies and keep streams (fiber-adapter / Scenario: Handler wrote before returning an error); verify `go test -run TestErrorHandler_Buffered` passes
+- [x] 6.4 Describe the request from fiber (fiber-adapter / Scenario: Request facts); verify `go test -run TestErrorHandler_RequestFacts` passes
+- [x] 6.5 Replace buffered bodies and keep streams (fiber-adapter / Scenario: Handler wrote before returning an error); verify `go test -run TestErrorHandler_Buffered` passes
   - RED: three rows with hook assertions
   - GREEN: reset buffered body; streaming detection and hook-only exit
   - REFACTOR: /simplify
-- [ ] 6.6 Skip disconnected clients, contain faulty consumer code, reject nil handler (fiber-adapter / Scenario: Client went away, Scenario: Faulty consumer code under fiber, Scenario: Nil handler); verify `go test -race -run 'TestErrorHandler_(Canceled|Faulty|Nil)'` passes
-- [ ] 6.7 Isolate concurrent requests (fiber-adapter / Scenario: Concurrent fiber requests); verify `go test -race -run TestErrorHandler_Concurrent` passes over a real listener with 200 requests
-- [ ] 6.8 Write the `fiberprblm` package godoc with `ExampleErrorHandler`; verify `go test -run Example` passes
-- [ ] 6.9 Verify slice 6 end to end and check `go tool cover -func` covers every `ErrorHandler` branch; run gopls diagnostics, `-race`, vet, lint, `GOWORK=off`
+- [x] 6.6 Skip disconnected clients, contain faulty consumer code, reject nil handler (fiber-adapter / Scenario: Client went away, Scenario: Faulty consumer code under fiber, Scenario: Nil handler); verify `go test -race -run 'TestErrorHandler_(Canceled|Faulty|Nil)'` passes
+- [x] 6.7 Isolate concurrent requests (fiber-adapter / Scenario: Concurrent fiber requests); verify `go test -race -run TestErrorHandler_Concurrent` passes over a real listener with 200 requests
+- [x] 6.8 Write the `fiberprblm` package godoc with `ExampleErrorHandler`; verify `go test -run Example` passes
+- [x] 6.9 Verify slice 6 end to end and check `go tool cover -func` covers every `ErrorHandler` branch; run gopls diagnostics, `-race`, vet, lint, `GOWORK=off`
 
 ## 7. Slice: fiber Scope and Recovery
 
