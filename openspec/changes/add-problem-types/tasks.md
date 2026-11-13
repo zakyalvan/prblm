@@ -130,13 +130,14 @@ Every slice ends with:
 
 ## 5. Slice: the gin middleware serves discovery for unclaimed paths
 
-- [ ] 5.1 Prove that gin runs `engine.Use` middleware for unmatched paths with an empty `c.FullPath()`, including when `engine.NoRoute` is set (CLAUDE.md rule 8; design D5); verify `go test -run TestGinNoRoute_RunsGlobalMiddleware` passes, and record the result in the task notes. If it fails, stop and re-plan slice 5 (fallback in D5).
-- [ ] 5.2 Serve discovery from `Middleware` (gin-adapter / Scenario: Discovery through gin, all rows); verify `go test -race -run TestMiddleware_Discovery` passes
+- [x] 5.1 Prove that gin runs `engine.Use` middleware for unmatched paths with an empty `c.FullPath()`, including when `engine.NoRoute` is set (CLAUDE.md rule 8; design D5); verify `go test -run TestGinNoRoute_RunsGlobalMiddleware` passes, and record the result in the task notes. If it fails, stop and re-plan slice 5 (fallback in D5).
+  - Result (gin v1.12.0): confirmed. `TestGinNoRoute_RunsGlobalMiddleware` in `ginprblm/noroute_test.go` passes: `engine.Use` middleware runs for unmatched paths with an empty `c.FullPath()`, with no `NoRoute` handler and with one registered before or after `Use`; a matched route has a non-empty `FullPath()`. Slice 5 proceeds as designed; the D5 fallback is not needed.
+- [x] 5.2 Serve discovery from `Middleware` (gin-adapter / Scenario: Discovery through gin, all rows); verify `go test -race -run TestMiddleware_Discovery` passes
   - RED: every served and not-served row, including the `NoRoute` rows, the route-wins row and the group-only row
   - GREEN: the pre-`Next` branch from design D5, serving through the core `Discovery()` handler and calling `c.Abort()`
   - REFACTOR: look for Long Function in `Middleware` (Extract Function `serveDiscovery`), then /simplify
-- [ ] 5.3 Document gin discovery (godoc, `ExampleMiddleware_discovery`, README note that the middleware must be installed with `engine.Use`); verify `go test -run Example` passes
-- [ ] 5.4 Verify slice 5 end to end. Check `go tool cover -func` covers every discovery branch in `Middleware`, and run diagnostics, vet, lint, `-race` and `GOWORK=off` in `ginprblm`.
+- [x] 5.3 Document gin discovery (godoc, `ExampleMiddleware_discovery`, README note that the middleware must be installed with `engine.Use`); verify `go test -run Example` passes
+- [x] 5.4 Verify slice 5 end to end. Check `go tool cover -func` covers every discovery branch in `Middleware`, and run diagnostics, vet, lint, `-race` and `GOWORK=off` in `ginprblm`.
 
 ## 6. Slice: the fiber error handler serves discovery on route-not-found
 

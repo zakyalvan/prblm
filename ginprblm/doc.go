@@ -58,6 +58,19 @@
 //	engine := gin.New()
 //	engine.Use(ginprblm.Recovery(opts...), ginprblm.Middleware(opts...))
 //
+// # Type documentation
+//
+// When the options register problem types with [prblm.WithTypes],
+// [Middleware] serves their documentation for GET and HEAD requests under
+// the namespace path that no route claims, exactly as the core's
+// [prblm.Handler.Discovery]. Install it with engine.Use, so it also runs for
+// unmatched paths:
+//
+//	engine.Use(ginprblm.Middleware(
+//		prblm.WithNamespace("/v1/api/probs"),
+//		prblm.WithTypes(OutOfCredit),
+//	))
+//
 // # Safe defaults
 //
 // The problem semantics are the core's, unchanged: an error no mapper

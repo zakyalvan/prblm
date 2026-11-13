@@ -360,6 +360,21 @@ engine.Group("/v1/contracts", ginprblm.Scope(prblm.Status(ErrLocked, http.Status
 	GET("/:id", func(c *gin.Context) { _ = c.Error(ErrLocked) }) // a 423 problem
 ```
 
+**Type documentation:** when the options register problem types (see
+[Discovering problem types](#discovering-problem-types)), `Middleware` also serves their
+documentation for GET and HEAD requests under the namespace path that no route claims, exactly as
+`Handler.Discovery` does. Install it with `engine.Use`: gin runs global middleware for unmatched
+paths, even with a `NoRoute` handler, but not group middleware. A route at a documentation path
+wins. *(Mirrors `ExampleMiddleware_discovery`.)*
+
+```go
+engine := gin.New()
+engine.Use(ginprblm.Middleware(
+	prblm.WithNamespace("/v1/api/probs"),
+	prblm.WithTypes(outOfCredit),
+))
+```
+
 ### fiber
 
 ```sh

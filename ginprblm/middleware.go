@@ -37,10 +37,24 @@ import (
 //
 // Register Middleware before middleware that aborts or writes: a header sent
 // before it runs cannot be replaced, so the error then only reaches the hook.
+//
+// When opts register problem types (see [prblm.WithTypes]), Middleware also
+// serves their documentation, exactly as [prblm.Handler.Discovery] does,
+// for GET and HEAD requests under the namespace path that no route claims.
+// It must then be installed with engine.Use: gin runs global middleware for
+// unmatched paths, even with a NoRoute handler, but not group middleware. A
+// route registered at a documentation path takes precedence.
 func Middleware(opts ...prblm.Option) gin.HandlerFunc {
 	h := prblm.NewHandler(opts...)
+	discovery, discoveryPath := h.Discovery(), h.DiscoveryPath()
 
 	return func(c *gin.Context) {
+		if isDiscovery(c, discoveryPath) {
+			serveDiscovery(c, discovery)
+
+			return
+		}
+
 		w := newDeferredWriter(c.Writer)
 		c.Writer = w
 		// Even when a panic unwinds through here, middleware outside this
@@ -51,6 +65,30 @@ func Middleware(opts ...prblm.Option) gin.HandlerFunc {
 
 		finish(h, c, w)
 	}
+}
+
+// isDiscovery reports whether c is a request for type documentation: a GET
+// or HEAD that no route claims (c.FullPath() is empty), for the discovery
+// path or a path under it. It is false when discovery is off (an empty
+// path).
+func isDiscovery(c *gin.Context, path string) bool {
+	if path == "" || c.FullPath() != "" {
+		return false
+	}
+
+	method, urlPath := c.Request.Method, c.Request.URL.Path
+	isRead := method == http.MethodGet || method == http.MethodHead
+
+	return isRead && (urlPath == path || strings.HasPrefix(urlPath, path+"/"))
+}
+
+// serveDiscovery answers c with the core discovery handler, exactly as
+// net/http would, and stops the chain. The status is committed at once:
+// a 304 or a HEAD response has no body, so nothing else would send it.
+func serveDiscovery(c *gin.Context, discovery http.Handler) {
+	discovery.ServeHTTP(c.Writer, c.Request)
+	c.Writer.WriteHeaderNow()
+	c.Abort()
 }
 
 // errStatusOnly is the error behind a problem for a status-only abort, such

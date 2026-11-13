@@ -101,3 +101,28 @@ func ExampleScope() {
 	// /v1/contracts/1 423
 	// /v1/vessels/1 500
 }
+
+func ExampleMiddleware_discovery() {
+	outOfCredit := prblm.DefineType("out-of-credit", http.StatusForbidden, "Out of credit",
+		"The account balance is below the price of the request.")
+
+	engine := gin.New()
+	// Installed with engine.Use, the middleware also serves the
+	// documentation of the registered types for paths no route claims.
+	engine.Use(ginprblm.Middleware(
+		prblm.WithNamespace("/v1/api/probs"),
+		prblm.WithTypes(outOfCredit),
+	))
+
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/v1/api/probs/out-of-credit", http.NoBody)
+	req.Header.Set("Accept", "application/json")
+
+	rec := httptest.NewRecorder()
+	engine.ServeHTTP(rec, req)
+
+	fmt.Println(rec.Code, rec.Header().Get("Content-Type"))
+	fmt.Println(rec.Body.String())
+	// Output:
+	// 200 application/json
+	// {"type":"/v1/api/probs/out-of-credit","subtype":"out-of-credit","status":403,"title":"Out of credit","description":"The account balance is below the price of the request."}
+}
