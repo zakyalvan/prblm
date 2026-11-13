@@ -23,7 +23,6 @@ jobs:
       - name: test-only drivers stay out of plugin code
         run: |
           ./.github/scripts/check-test-only-deps.sh mappers/gormmap gorm.io/driver/sqlite github.com/mattn/go-sqlite3
-          ./.github/scripts/check-test-only-deps.sh mappers/pgxmap gorm.io/gorm github.com/kartaladev/prblm/mappers/gormmap
           ./.github/scripts/check-test-only-deps.sh mappers/validatormap github.com/go-playground/locales/en github.com/go-playground/locales/id
 
   test:
@@ -31,7 +30,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        module: [., ginprblm, fiberprblm, internal/paritytest, mappers/gormmap, mappers/pgxmap, mappers/validatormap]
+        module: [., ginprblm, fiberprblm, internal/paritytest, internal/plugintest, mappers/gormmap, mappers/pgxmap, mappers/validatormap]
     defaults:
       run:
         working-directory: ${{ matrix.module }}
@@ -61,7 +60,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        module: [., ginprblm, fiberprblm, internal/paritytest, mappers/gormmap, mappers/pgxmap, mappers/validatormap]
+        module: [., ginprblm, fiberprblm, internal/paritytest, internal/plugintest, mappers/gormmap, mappers/pgxmap, mappers/validatormap]
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-go@v6

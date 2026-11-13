@@ -18,15 +18,22 @@
 //	23514  422     A value does not satisfy a constraint.
 //	40001  409     The request conflicted with a concurrent change; retry it.
 //	40P01  409     The request conflicted with a concurrent change; retry it.
-//	57014  503     The service is temporarily unavailable.
 //	53300  503     The service is temporarily unavailable.
+//	57014  504     The request took too long to complete.
 //
-// The last four are retryable: their problems carry a Retry-After header,
-// one second unless [WithRetryAfter] sets another value. Every other code,
-// such as an undefined table (42P01) or a syntax error (42601), is a server
-// fault: it is left to later mappers and finally to the handler's safe 500
-// fallback. So are errors without a PostgreSQL error in the chain, including
-// pgx.ErrNoRows; map that one with a mapper of your own.
+// 40001, 40P01 and 53300 are retryable: their problems carry a Retry-After
+// header, one second unless [WithRetryAfter] sets another value. 57014
+// (query_canceled) is mostly a statement_timeout, since pgx reports a
+// canceled request context as a context error rather than this code. A
+// retry would most likely time out again, so its problem has no
+// Retry-After, and its 504 matches the handler's mapping of
+// context.DeadlineExceeded.
+//
+// Every other code, such as an undefined table (42P01) or a syntax error
+// (42601), is a server fault: it is left to later mappers and finally to the
+// handler's safe 500 fallback. So are errors without a PostgreSQL error in
+// the chain. That includes pgx.ErrNoRows, which wraps sql.ErrNoRows: the
+// mapper of github.com/kartaladev/prblm/mappers/sqlmap maps it to 404.
 //
 // # Privacy
 //
@@ -50,9 +57,15 @@
 //
 // # gorm
 //
-// With gorm's TranslateError off, gorm returns the driver's error, which
-// this mapper matches. Register it after the gorm mapper of
-// github.com/kartaladev/prblm/mappers/gormmap to handle both:
+// Register this mapper before the gorm mapper of
+// github.com/kartaladev/prblm/mappers/gormmap:
 //
-//	h := prblm.NewHandler(prblm.WithMappers(gormmap.Mapper(), pgxmap.Mapper()))
+//	h := prblm.NewHandler(prblm.WithMappers(pgxmap.Mapper(), gormmap.Mapper()))
+//
+// With gorm's TranslateError off, gorm returns the driver's error, which
+// this mapper matches. With it on, gorm's PostgreSQL driver (v1.6.2 and
+// later) wraps both its sentinel, such as gorm.ErrDuplicatedKey, and the
+// driver's error. Registered first, this mapper answers those errors too,
+// with the problems of [WithConstraint] and [WithCode]; registered after the
+// gorm mapper, it would never see them.
 package pgxmap

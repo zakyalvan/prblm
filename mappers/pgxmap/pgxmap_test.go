@@ -1,6 +1,7 @@
 package pgxmap_test
 
 import (
+	"database/sql"
 	"errors"
 	"fmt"
 	"io"
@@ -15,6 +16,7 @@ import (
 
 	"github.com/kartaladev/prblm"
 	"github.com/kartaladev/prblm/mappers/pgxmap"
+	"github.com/kartaladev/prblm/mappers/sqlmap"
 )
 
 const (
@@ -24,6 +26,7 @@ const (
 	detailConstraint  = "A value does not satisfy a constraint."
 	detailRetry       = "The request conflicted with a concurrent change; retry it."
 	detailUnavailable = "The service is temporarily unavailable."
+	detailTimeout     = "The request took too long to complete."
 )
 
 // response is what a client sees of a problem response.
@@ -103,7 +106,7 @@ func TestMapper_Codes(t *testing.T) {
 		// Examples: retryable and capacity.
 		{code: "40001", wantStatus: http.StatusConflict, wantDetail: detailRetry},
 		{code: "40P01", wantStatus: http.StatusConflict, wantDetail: detailRetry},
-		{code: "57014", wantStatus: http.StatusServiceUnavailable, wantDetail: detailUnavailable},
+		{code: "57014", wantStatus: http.StatusGatewayTimeout, wantDetail: detailTimeout},
 		{code: "53300", wantStatus: http.StatusServiceUnavailable, wantDetail: detailUnavailable},
 	}
 
@@ -175,6 +178,37 @@ func TestMapper_Degenerate(t *testing.T) {
 
 			if gotStatus != tt.wantStatus {
 				t.Errorf("MapError() status = %d, want %d (0 = no match)", gotStatus, tt.wantStatus)
+			}
+		})
+	}
+}
+
+// TestMapper_PgxNoRows proves the godoc: pgx.ErrNoRows wraps sql.ErrNoRows,
+// so it is the SQL mapper's to map, never this one's.
+func TestMapper_PgxNoRows(t *testing.T) {
+	t.Parallel()
+
+	if !errors.Is(pgx.ErrNoRows, sql.ErrNoRows) {
+		t.Fatal("pgx.ErrNoRows does not wrap sql.ErrNoRows")
+	}
+
+	tests := []struct {
+		name    string
+		mappers []prblm.Mapper
+		want    int
+	}{
+		{name: "PostgreSQL mapper, SQL mapper", mappers: []prblm.Mapper{pgxmap.Mapper(), sqlmap.Mapper()}, want: http.StatusNotFound},
+		{name: "PostgreSQL mapper only", mappers: []prblm.Mapper{pgxmap.Mapper()}, want: http.StatusInternalServerError},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := serve(t, prblm.NewHandler(prblm.WithMappers(tt.mappers...)), "", fmt.Errorf("find account: %w", pgx.ErrNoRows))
+
+			if got.status != tt.want {
+				t.Errorf("status = %d, want %d", got.status, tt.want)
 			}
 		})
 	}
@@ -274,7 +308,7 @@ func TestMapper_RetryAfter(t *testing.T) {
 		{name: "default deadlock", code: "40P01", want: "1"},
 		{name: "default too many connections", code: "53300", want: "1"},
 		{name: "default serialization failure", code: "40001", want: "1"},
-		{name: "default query canceled", code: "57014", want: "1"},
+		{name: "query canceled is not retryable", code: "57014", want: ""},
 		{name: "5 seconds", code: "40001", opts: []pgxmap.Option{pgxmap.WithRetryAfter(5 * time.Second)}, want: "5"},
 		{name: "rounded down", code: "40001", opts: []pgxmap.Option{pgxmap.WithRetryAfter(2500 * time.Millisecond)}, want: "2"},
 		{name: "not retryable", code: "23505", want: ""},
@@ -442,13 +476,15 @@ func TestMapper_ConstraintInvalid(t *testing.T) {
 	}
 }
 
+// declines is a problem function that declines every error.
+func declines(*pgconn.PgError) *prblm.Problem { return nil }
+
 func TestMapper_CodeOverride(t *testing.T) {
 	t.Parallel()
 
 	status := func(s int) func(*pgconn.PgError) *prblm.Problem {
 		return func(*pgconn.PgError) *prblm.Problem { return prblm.New(s) }
 	}
-	declines := func(*pgconn.PgError) *prblm.Problem { return nil }
 
 	// Scenario: Code overrides.
 	tests := []struct {
@@ -492,24 +528,24 @@ func TestMapper_CodeOverride(t *testing.T) {
 func TestMapper_CodeOverrideInvalid(t *testing.T) {
 	t.Parallel()
 
-	tests := []struct {
-		fn       func(*pgconn.PgError) *prblm.Problem
-		code     string
-		argument string
-	}{
-		{code: "", fn: func(*pgconn.PgError) *prblm.Problem { return nil }, argument: "SQLSTATE code"},
-		{code: "23505", fn: nil, argument: "problem function"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.argument, func(t *testing.T) {
+	// Scenario: Invalid code registration.
+	for _, code := range []string{"", "2350", "235050", "40p01", "23 05", "2350\u00e9"} {
+		t.Run("code "+code, func(t *testing.T) {
 			t.Parallel()
 
-			assertPanics(t, tt.argument, func() {
-				pgxmap.Mapper(pgxmap.WithCode(tt.code, tt.fn))
+			assertPanics(t, "SQLSTATE code", func() {
+				pgxmap.Mapper(pgxmap.WithCode(code, declines))
 			})
 		})
 	}
+
+	t.Run("nil function", func(t *testing.T) {
+		t.Parallel()
+
+		assertPanics(t, "problem function", func() {
+			pgxmap.Mapper(pgxmap.WithCode("23505", nil))
+		})
+	})
 }
 
 // TestMapper_EndToEnd serves real HTTP requests, in JSON and XML, from a

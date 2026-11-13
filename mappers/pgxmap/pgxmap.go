@@ -45,9 +45,13 @@ var defaults = map[string]entry{
 	// Transaction conflicts: the same request may succeed when retried.
 	"40001": retryConflict,
 	"40P01": retryConflict,
-	// Capacity: the database is overloaded or canceled a slow statement.
-	"57014": unavailable,
+	// Capacity: the database is overloaded.
 	"53300": unavailable,
+	// Query canceled, mostly by statement_timeout: pgx surfaces a canceled
+	// request context as a context error, not as this code. A retry would
+	// most likely time out again, so there is no Retry-After; 504 matches
+	// the core's mapping of context.DeadlineExceeded.
+	"57014": {status: http.StatusGatewayTimeout, detail: "The request took too long to complete."},
 }
 
 // problemFunc builds the problem for a PostgreSQL error, or returns nil to
@@ -69,7 +73,7 @@ type config struct {
 }
 
 // WithRetryAfter sets the Retry-After header of the default problems for
-// retryable codes (40001, 40P01, 57014 and 53300), one second by default.
+// retryable codes (40001, 40P01 and 53300), one second by default.
 // The header carries whole seconds, so d is rounded down. Problems from
 // [WithConstraint] and [WithCode] functions are used as they are; add the
 // header there with prblm.WithHeader when they need it. WithRetryAfter
@@ -129,11 +133,15 @@ func WithConstraint(name string, fn func(pe *pgconn.PgError) *prblm.Problem) Opt
 // to no match for an unlisted code. A later registration for the same code
 // replaces an earlier one.
 //
-// fn must not keep or modify the error. WithCode panics when code is empty
-// or fn is nil.
+// code must be a SQLSTATE code as PostgreSQL reports it: five digits or
+// upper-case ASCII letters, such as "23505" or "40P01". Any other code would
+// never match, so the function would silently never run.
+//
+// fn must not keep or modify the error. WithCode panics when code is not a
+// SQLSTATE code or fn is nil.
 func WithCode(code string, fn func(pe *pgconn.PgError) *prblm.Problem) Option {
-	if code == "" {
-		panic("pgxmap: WithCode needs a SQLSTATE code")
+	if !isSQLState(code) {
+		panic(fmt.Sprintf("pgxmap: WithCode needs a SQLSTATE code of five digits or upper-case letters, got %q", code))
 	}
 
 	if fn == nil {
@@ -143,6 +151,23 @@ func WithCode(code string, fn func(pe *pgconn.PgError) *prblm.Problem) Option {
 	return func(c *config) {
 		c.codes[code] = fn
 	}
+}
+
+// isSQLState reports whether code has the form of a SQLSTATE code as
+// PostgreSQL reports it: five characters, each a digit or an upper-case
+// ASCII letter.
+func isSQLState(code string) bool {
+	if len(code) != 5 {
+		return false
+	}
+
+	for _, c := range []byte(code) {
+		if (c < '0' || c > '9') && (c < 'A' || c > 'Z') {
+			return false
+		}
+	}
+
+	return true
 }
 
 // retryAfterHeader returns the Retry-After header for d, in whole seconds.
