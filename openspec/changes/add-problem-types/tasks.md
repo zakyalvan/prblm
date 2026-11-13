@@ -8,65 +8,65 @@ Every slice ends with:
 
 ## 1. Slice: the gin and fiber adapters are configured with core options
 
-- [ ] 1.1 Build the gin middleware from options (gin-adapter / Scenario: Options configure the middleware); verify `go test -race -run TestMiddleware_Options` passes in `ginprblm`
+- [x] 1.1 Build the gin middleware from options (gin-adapter / Scenario: Options configure the middleware); verify `go test -race -run TestMiddleware_Options` passes in `ginprblm`
   - RED: `TestMiddleware_Options` with rows (none) → 500, `WithMappers(...)` → 404, nil options around a mapper → 404, a single `nil` → 500; fails to compile because `Middleware` takes `*prblm.Handler`. Before changing the signature, run `go_symbol_references` on `Middleware`.
   - GREEN: `Middleware(opts ...prblm.Option)` calls `prblm.NewHandler(opts...)` once and keeps the rest unchanged. Update every existing test and Example to the options form, and delete `TestMiddleware_NilHandler` and `mustExist`'s Middleware path (the removed requirement).
   - REFACTOR: look for Shotgun Surgery in the test helpers that built handlers (Extract Function `newEngine(opts ...prblm.Option)`), then /simplify
-- [ ] 1.2 Build the gin recovery from options and share options with the middleware (gin-adapter / Scenario: Shared options across middleware and recovery); verify `go test -race -run 'TestRecovery_Options|TestRecovery_'` passes
+- [x] 1.2 Build the gin recovery from options and share options with the middleware (gin-adapter / Scenario: Shared options across middleware and recovery); verify `go test -race -run 'TestRecovery_Options|TestRecovery_'` passes
   - RED: `TestRecovery_Options` with the rows for a recorded `ErrVesselNotFound` (404, hook called 1 time) and a `"boom"` panic (500, hook called 1 time) through `Recovery(opts...)` and `Middleware(opts...)`; fails to compile on the old signature
   - GREEN: `Recovery(opts ...prblm.Option)`; delete `TestRecovery_NilHandler` and `mustExist`
   - REFACTOR: Inline Function on any wrapper left without a reason, then /simplify
-- [ ] 1.3 Build the fiber error handler from options (fiber-adapter / Scenario: Options configure the error handler); verify `go test -race -run TestErrorHandler_Options` passes in `fiberprblm`
+- [x] 1.3 Build the fiber error handler from options (fiber-adapter / Scenario: Options configure the error handler); verify `go test -race -run TestErrorHandler_Options` passes in `fiberprblm`
   - RED: `TestErrorHandler_Options` with the same four rows using `app.Test`; fails to compile on the old signature
   - GREEN: `ErrorHandler(opts ...prblm.Option)`; delete `TestErrorHandler_Nil` and the nil check
   - REFACTOR: align the test helpers with gin's (Extract Function), then /simplify
-- [ ] 1.4 Build the parity servers from one options slice (gin-adapter and fiber-adapter / Scenario: Same output as net/http, the five existing rows); verify `go test -race ./internal/paritytest` passes
+- [x] 1.4 Build the parity servers from one options slice (gin-adapter and fiber-adapter / Scenario: Same output as net/http, the five existing rows); verify `go test -race ./internal/paritytest` passes
   - RED: change `newHandler()` to `newOptions()` returning `[]prblm.Option` and build all three servers from it; fails to compile until the adapter calls change
   - GREEN: `prblm.NewHandler(opts...)` for net/http, `ginprblm.Middleware(opts...)` and `ginprblm.Recovery(opts...)` for gin, and `fiberprblm.ErrorHandler(opts...)` for fiber
   - REFACTOR: remove the duplicated server setup (Extract Function), then /simplify
-- [ ] 1.5 Update the godoc, Examples and README gin/fiber sections to the options form; verify `go test -run Example` passes in both modules and every README code block is mirrored by a compiling Example
-- [ ] 1.6 Verify slice 1 end to end: the full suites pass in all four modules, `go tool cover -func` shows `Middleware`, `Recovery` and `ErrorHandler` fully covered, and diagnostics, vet, lint, `-race` and `GOWORK=off` are clean
+- [x] 1.5 Update the godoc, Examples and README gin/fiber sections to the options form; verify `go test -run Example` passes in both modules and every README code block is mirrored by a compiling Example
+- [x] 1.6 Verify slice 1 end to end: the full suites pass in all four modules, `go tool cover -func` shows `Middleware`, `Recovery` and `ErrorHandler` fully covered, and diagnostics, vet, lint, `-race` and `GOWORK=off` are clean
 
 ## 2. Slice: relative sub-types resolve against a namespace, end to end
 
-- [ ] 2.1 Validate the namespace at construction (problem-types / Scenario: Namespace validated); verify `go test -race -run TestWithNamespace_Validation` passes in the core
+- [x] 2.1 Validate the namespace at construction (problem-types / Scenario: Namespace validated); verify `go test -race -run TestWithNamespace_Validation` passes in the core
   - RED: `TestWithNamespace_Validation` with every accepted and rejected row, asserting a panic whose message names `WithNamespace`; fails because `WithNamespace` doesn't exist
   - GREEN: `WithNamespace(ns string) Option` stores the raw value. `NewHandler` validates it after all options with `url.Parse` (design D2), trims one trailing `/` and panics on failure.
   - REFACTOR: look for Long Function in the validator (Extract Function per form: absolute URI, absolute path), then /simplify
-- [ ] 2.2 Accept or reject sub-types with an allocation-free scanner (problem-types / Scenario: Invalid relative type, the "malformed sub-types" rows as unit cases); verify `go test -run TestIsSubtype` passes
+- [x] 2.2 Accept or reject sub-types with an allocation-free scanner (problem-types / Scenario: Invalid relative type, the "malformed sub-types" rows as unit cases); verify `go test -run TestIsSubtype` passes
   - RED: `TestIsSubtype`, an internal test table of valid sub-types (`contracts/blacklisted-supplier`, `a/b/c-2`, `v2/limits/rate.exceeded`, `x`) and every malformed row; fails because `isSubtype` doesn't exist
   - GREEN: a byte scanner implementing the grammar in design D2
   - REFACTOR: Replace Nested Conditional with Guard Clauses in the scanner, then /simplify. Add `FuzzIsSubtype`, asserting that an accepted sub-type never contains `..`, `//`, `?`, `#` or uppercase letters.
-- [ ] 2.3 Resolve relative sub-types and keep everything else (problem-types / Scenario: Type resolved); verify `go test -race -run TestResolve_Namespace` passes
+- [x] 2.3 Resolve relative sub-types and keep everything else (problem-types / Scenario: Type resolved); verify `go test -race -run TestResolve_Namespace` passes
   - RED: `TestResolve_Namespace` with every resolved and kept row through `httptest` and `Wrap`; fails because the type is passed through
   - GREEN: `resolveType` in `complete`, after `enrich`, followed by a second `finalize` (design D2)
   - REFACTOR: look for Feature Envy between `resolveType` and `Problem` (Move Function if the type rules belong on `Problem`), then /simplify
-- [ ] 2.4 Keep pass-through without a namespace (problem-types / Scenario: No namespace); verify `go test -run TestResolve_NoNamespace` passes
+- [x] 2.4 Keep pass-through without a namespace (problem-types / Scenario: No namespace); verify `go test -run TestResolve_NoNamespace` passes
   - RED: `TestResolve_NoNamespace` with the three rows, asserting no hook note. If it already passes, record that and keep it as a regression test.
   - GREEN: early return in `resolveType`
   - REFACTOR: none expected; /simplify
-- [ ] 2.5 Ignore request host headers (problem-types / Scenario: Hostile host headers); verify `go test -run TestResolve_HostHeaders` passes
+- [x] 2.5 Ignore request host headers (problem-types / Scenario: Hostile host headers); verify `go test -run TestResolve_HostHeaders` passes
   - RED: `TestResolve_HostHeaders` with the three rows
   - GREEN: none expected beyond 2.3. Keep the test as a security regression.
   - REFACTOR: /simplify
-- [ ] 2.6 Replace invalid relative types with about:blank and note them (problem-types / Scenario: Invalid relative type, both tables); verify `go test -race -run TestResolve_InvalidType` passes
+- [x] 2.6 Replace invalid relative types with about:blank and note them (problem-types / Scenario: Invalid relative type, both tables); verify `go test -race -run TestResolve_InvalidType` passes
   - RED: `TestResolve_InvalidType` with every malformed row and the self-describing, scoped-mapper and enricher rows, asserting status 409, title `Locked`, no `type` member, and a hook note wrapping `ErrInvalidType` before the main call; fails because `ErrInvalidType` doesn't exist
   - GREEN: exported `ErrInvalidType`; `resolveType` clears the type and calls `report`
   - REFACTOR: look for Duplicated Code with the `ErrInvalidStatus` note (Extract Function `note(ctx, p, err)`), then /simplify
-- [ ] 2.7 Survive a panicking hook on the note (problem-types / Scenario: Faulty hook on a type note); verify `go test -run TestResolve_InvalidType_FaultyHook` passes
+- [x] 2.7 Survive a panicking hook on the note (problem-types / Scenario: Faulty hook on a type note); verify `go test -run TestResolve_InvalidType_FaultyHook` passes
   - RED: the two hook rows
   - GREEN: none expected (`report` recovers). Keep the test as a regression.
   - REFACTOR: /simplify
-- [ ] 2.8 Resolve every problem source on the request's copy (problem-types / Scenario: Problem sources, Scenario: Shared problem stays relative); verify `go test -race -run 'TestResolve_Sources|TestResolve_SharedProblem'` passes
+- [x] 2.8 Resolve every problem source on the request's copy (problem-types / Scenario: Problem sources, Scenario: Shared problem stays relative); verify `go test -race -run 'TestResolve_Sources|TestResolve_SharedProblem'` passes
   - RED: the four source rows, then 1 and 200 concurrent requests sharing one package-level problem, asserting it still has type `contracts/locked`
   - GREEN: none expected if 2.3 resolves on the copy; otherwise move resolution after the clone
   - REFACTOR: /simplify
-- [ ] 2.9 Reject an invalid namespace in the adapters at construction (gin-adapter and fiber-adapter / Scenario: Invalid options fail at construction, the namespace rows); verify `go test -run 'TestMiddleware_InvalidOptions|TestErrorHandler_InvalidOptions'` passes
+- [x] 2.9 Reject an invalid namespace in the adapters at construction (gin-adapter and fiber-adapter / Scenario: Invalid options fail at construction, the namespace rows); verify `go test -run 'TestMiddleware_InvalidOptions|TestErrorHandler_InvalidOptions'` passes
   - RED: the namespace rows for the error middleware, the recovery middleware and the fiber error handler
   - GREEN: none expected (`NewHandler` panics)
   - REFACTOR: /simplify
-- [ ] 2.10 Document `WithNamespace` and `ErrInvalidType` with their reasons (godoc, `ExampleWithNamespace` for both forms, README "Problem types" section); verify `go test -run Example` passes
-- [ ] 2.11 Verify slice 2 end to end through net/http, gin and fiber: add a temporary parity check of the resolved `ErrBlacklisted` row (kept in 7.1). Check `go tool cover -func` covers every branch of `resolveType`, `isSubtype` and the namespace validator, and run diagnostics, vet, lint, `-race` and `GOWORK=off`.
+- [x] 2.10 Document `WithNamespace` and `ErrInvalidType` with their reasons (godoc, `ExampleWithNamespace` for both forms, README "Problem types" section); verify `go test -run Example` passes
+- [x] 2.11 Verify slice 2 end to end through net/http, gin and fiber: add a temporary parity check of the resolved `ErrBlacklisted` row (kept in 7.1). Check `go tool cover -func` covers every branch of `resolveType`, `isSubtype` and the namespace validator, and run diagnostics, vet, lint, `-race` and `GOWORK=off`.
 
 ## 3. Slice: type definitions build problems and register with the handler
 

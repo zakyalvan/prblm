@@ -15,12 +15,10 @@ import (
 func ExampleMiddleware() {
 	errVesselNotFound := errors.New("vessel not found")
 
-	h := prblm.NewHandler(prblm.WithMappers(
-		prblm.Status(errVesselNotFound, http.StatusNotFound),
-	))
-
 	engine := gin.New()
-	engine.Use(ginprblm.Middleware(h))
+	engine.Use(ginprblm.Middleware(prblm.WithMappers(
+		prblm.Status(errVesselNotFound, http.StatusNotFound),
+	)))
 	engine.GET("/v1/vessels/:id", func(c *gin.Context) {
 		_ = c.Error(errVesselNotFound) // written as a problem response
 	})
@@ -38,7 +36,7 @@ func ExampleMiddleware() {
 
 func ExampleMiddleware_abort() {
 	engine := gin.New()
-	engine.Use(ginprblm.Middleware(prblm.NewHandler()))
+	engine.Use(ginprblm.Middleware())
 	engine.GET("/v1/vessels/:id", func(c *gin.Context) {
 		// The error's text is never sent; 403 is used as the status.
 		_ = c.AbortWithError(http.StatusForbidden, errors.New("token abc expired"))
@@ -60,14 +58,15 @@ func ExampleMiddleware_abort() {
 }
 
 func ExampleRecovery() {
-	h := prblm.NewHandler(prblm.OnError(func(_ context.Context, err error, _ *prblm.Problem) {
+	logProblem := func(_ context.Context, err error, _ *prblm.Problem) {
 		if pe, ok := errors.AsType[*prblm.PanicError](err); ok {
 			fmt.Println("hook:", pe.Value) // log the value and pe.Stack here
 		}
-	}))
+	}
+	opts := []prblm.Option{prblm.OnError(logProblem)}
 
 	engine := gin.New()
-	engine.Use(ginprblm.Recovery(h), ginprblm.Middleware(h))
+	engine.Use(ginprblm.Recovery(opts...), ginprblm.Middleware(opts...))
 	engine.GET("/v1/vessels/:id", func(*gin.Context) {
 		panic("db password=hunter2")
 	})
@@ -86,7 +85,7 @@ func ExampleScope() {
 	errLocked := errors.New("locked")
 
 	engine := gin.New()
-	engine.Use(ginprblm.Middleware(prblm.NewHandler()))
+	engine.Use(ginprblm.Middleware())
 	engine.Group("/v1/contracts", ginprblm.Scope(prblm.Status(errLocked, http.StatusLocked))).
 		GET("/:id", func(c *gin.Context) { _ = c.Error(errLocked) })
 	engine.GET("/v1/vessels/:id", func(c *gin.Context) { _ = c.Error(errLocked) })

@@ -15,6 +15,70 @@ import (
 	"github.com/kartaladev/prblm/fiberprblm"
 )
 
+// fiber-adapter / Scenario: Options configure the error handler.
+func TestErrorHandler_Options(t *testing.T) {
+	t.Parallel()
+
+	mapper := prblm.WithMappers(prblm.Status(ErrVesselNotFound, http.StatusNotFound))
+
+	tests := []struct {
+		name   string
+		opts   []prblm.Option
+		status int
+	}{
+		{name: "none", status: http.StatusInternalServerError},
+		{name: "mapper", opts: []prblm.Option{mapper}, status: http.StatusNotFound},
+		{name: "nil options around a mapper", opts: []prblm.Option{nil, mapper, nil}, status: http.StatusNotFound},
+		{name: "single nil", opts: []prblm.Option{nil}, status: http.StatusInternalServerError},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			app := newApp(tt.opts...)
+			app.Get("/v1/vessels/:id", func(fiber.Ctx) error { return ErrVesselNotFound })
+
+			res := test(t, app, get(t, http.MethodGet, "/v1/vessels/7"))
+
+			if res.status != tt.status {
+				t.Errorf("status = %d, want %d", res.status, tt.status)
+			}
+
+			if ct := res.header.Get("Content-Type"); ct != "application/problem+json" {
+				t.Errorf("Content-Type = %q, want application/problem+json", ct)
+			}
+		})
+	}
+}
+
+// fiber-adapter / Scenario: Invalid options fail at construction.
+func TestErrorHandler_InvalidOptions(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		opts  []prblm.Option
+		named string
+	}{
+		{name: "relative namespace", opts: []prblm.Option{prblm.WithNamespace("v1/api/probs")}, named: "WithNamespace"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			defer func() {
+				if msg := fmt.Sprint(recover()); !strings.Contains(msg, tt.named) {
+					t.Errorf("panic = %q, want a message naming %s", msg, tt.named)
+				}
+			}()
+
+			fiberprblm.ErrorHandler(tt.opts...)
+		})
+	}
+}
+
 // fiber-adapter / Scenario: Returned errors.
 func TestErrorHandler_Returned(t *testing.T) {
 	t.Parallel()
@@ -417,20 +481,6 @@ func TestErrorHandler_Faulty_RespondPanics(t *testing.T) {
 	}
 }
 
-// fiber-adapter / Scenario: Nil handler.
-func TestErrorHandler_Nil(t *testing.T) {
-	t.Parallel()
-
-	defer func() {
-		msg, _ := recover().(string)
-		if !strings.Contains(msg, "problem handler") {
-			t.Errorf("panic = %q, want a message naming the problem handler", msg)
-		}
-	}()
-
-	fiberprblm.ErrorHandler(nil)
-}
-
 // fiber-adapter / Scenario: Concurrent fiber requests.
 func TestErrorHandler_Concurrent(t *testing.T) {
 	t.Parallel()
@@ -476,7 +526,7 @@ func TestErrorHandler_Concurrent(t *testing.T) {
 func TestErrorHandler_NilError(t *testing.T) {
 	t.Parallel()
 
-	handle := fiberprblm.ErrorHandler(prblm.NewHandler())
+	handle := fiberprblm.ErrorHandler()
 
 	app := fiber.New()
 	app.Get("/x", func(c fiber.Ctx) error {

@@ -11,8 +11,12 @@ import (
 )
 
 // Middleware returns gin middleware that writes the last error recorded with
-// c.Error as a problem response, resolved by h, once the handlers after it
-// have returned.
+// c.Error as a problem response once the handlers after it have returned.
+//
+// opts are the options of [prblm.NewHandler], which builds the problem
+// handler once, here: no options give the core's safe defaults, and an
+// invalid option panics at startup rather than inside a request. Pass
+// [Recovery] the same options.
 //
 // While they run, the middleware holds back the status that gin's aborts
 // would otherwise send at once, so the problem keeps full control of the
@@ -33,10 +37,8 @@ import (
 //
 // Register Middleware before middleware that aborts or writes: a header sent
 // before it runs cannot be replaced, so the error then only reaches the hook.
-//
-// Middleware panics when h is nil.
-func Middleware(h *prblm.Handler) gin.HandlerFunc {
-	mustExist(h, "Middleware")
+func Middleware(opts ...prblm.Option) gin.HandlerFunc {
+	h := prblm.NewHandler(opts...)
 
 	return func(c *gin.Context) {
 		w := newDeferredWriter(c.Writer)
@@ -110,14 +112,6 @@ func answer(h *prblm.Handler, r *http.Request, w *deferredWriter, err error) {
 	}
 
 	send(w, res)
-}
-
-// mustExist panics when h is nil, naming the constructor, so that a missing
-// prblm.NewHandler call fails at startup rather than inside a request.
-func mustExist(h *prblm.Handler, constructor string) {
-	if h == nil {
-		panic("ginprblm: " + constructor + " called with a nil problem handler; create it with prblm.NewHandler")
-	}
 }
 
 // respond resolves err into the problem response for r. The core contains

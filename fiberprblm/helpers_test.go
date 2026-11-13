@@ -62,7 +62,7 @@ func assertHook(t *testing.T, hook *hookRecorder, want error) {
 // newApp returns a fiber app whose error handler is the adapter with a
 // problem handler built from opts.
 func newApp(opts ...prblm.Option) *fiber.App {
-	return fiber.New(fiber.Config{ErrorHandler: fiberprblm.ErrorHandler(prblm.NewHandler(opts...))})
+	return fiber.New(fiber.Config{ErrorHandler: fiberprblm.ErrorHandler(opts...)})
 }
 
 // response is a fiber response read in full.

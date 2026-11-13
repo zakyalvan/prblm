@@ -130,6 +130,41 @@ fmt.Println(p.Set("trace-id", "abc"))
 fmt.Println(p.Set("status", 500))
 ```
 
+## Problem types
+
+Give the application one namespace for its problem types with `WithNamespace`, and let business
+code name only a sub-type, such as `contracts/blacklisted-supplier`. When the problem is answered,
+the sub-type is resolved under the namespace, so every team's types share one root.
+*(Mirrors `ExampleWithNamespace`.)*
+
+```go
+blacklisted := prblm.WithMappers(prblm.Is(errBlacklisted, func(error) *prblm.Problem {
+	return prblm.New(http.StatusConflict, prblm.WithType("contracts/blacklisted-supplier"))
+}))
+
+h := prblm.NewHandler(prblm.WithNamespace("/v1/api/probs"), blacklisted)
+// type: "/v1/api/probs/contracts/blacklisted-supplier"
+
+h = prblm.NewHandler(prblm.WithNamespace("https://kartala.id/probs"), blacklisted)
+// type: "https://kartala.id/probs/contracts/blacklisted-supplier"
+```
+
+- **The namespace** is an absolute `http`/`https` URI with a host, or an absolute path. It needs a
+  path other than `/`, and no query, fragment, user info, `.` or `..` segment. An invalid namespace
+  panics in `NewHandler`, because it is a startup misconfiguration.
+- **A sub-type** is one or more `/`-separated segments of lowercase letters and digits, with single
+  `-`, `_` or `.` between them.
+- **Kept as given:** an empty type (`about:blank`), `about:blank` itself, an absolute URI such as
+  `https://…` or `urn:…`, and an absolute path.
+- **Any other relative type** is a mistake, and a client would resolve it against the request URL.
+  It becomes `about:blank`, keeping the status, title and detail, and the `OnError` hook receives
+  a note wrapping `ErrInvalidType`.
+- **A path namespace** gives a path-only `type`, which the client resolves against the URL it
+  requested. The library never builds a type from the request's `Host` or `X-Forwarded-*` headers,
+  which a client controls. Use an absolute namespace when types must be the same on every host,
+  for example across staging and production.
+- **Without a namespace**, types are written exactly as given.
+
 ## Logging
 
 The library never logs. The `OnError` hook receives every answered error with the problem being
@@ -144,8 +179,9 @@ h := prblm.NewHandler(prblm.OnError(func(_ context.Context, err error, p *prblm.
 
 Before that call, the hook may also receive notes about mistakes the handler worked around: a
 `*PanicError` from consumer code that panicked, an error wrapping `ErrInvalidStatus` for a mapper
-status outside 400–599, or an error wrapping `ErrEncoding` for a problem that could not be
-encoded. Tell them apart from the error being answered with `errors.Is` and `errors.As`.
+status outside 400–599, an error wrapping `ErrInvalidType` for a relative type that is not a valid
+sub-type (see [Problem types](#problem-types)), or an error wrapping `ErrEncoding` for a problem
+that could not be encoded. Tell them apart from the error being answered with `errors.Is` and `errors.As`.
 Mappers, enrichers and the hook may panic without breaking the response.
 
 ## Panic recovery
@@ -222,15 +258,14 @@ go get github.com/kartaladev/prblm/ginprblm
 ```
 
 `ginprblm.Middleware` turns the last error recorded with `c.Error` into a problem, once the
-handlers after it return (mirrored by `ExampleMiddleware`):
+handlers after it return. It takes the same options as `prblm.NewHandler` and builds its problem
+handler from them; with none it gives the safe defaults (mirrored by `ExampleMiddleware`):
 
 ```go
-h := prblm.NewHandler(prblm.WithMappers(
-	prblm.Status(ErrVesselNotFound, http.StatusNotFound),
-))
-
 engine := gin.New()
-engine.Use(ginprblm.Middleware(h))
+engine.Use(ginprblm.Middleware(prblm.WithMappers(
+	prblm.Status(ErrVesselNotFound, http.StatusNotFound),
+)))
 engine.GET("/v1/vessels/:id", func(c *gin.Context) {
 	_ = c.Error(ErrVesselNotFound) // written as a 404 problem
 })
@@ -262,14 +297,17 @@ engine.GET("/v1/reports", func(c *gin.Context) {
 Middleware that runs earlier and sends the header first leaves nothing to replace: the error then
 only reaches the hook.
 
-**Recovery and route groups:** `ginprblm.Recovery(h)` turns panics into the safe 500 problem and
-gives the panic value and stack to the `OnError` hook. Use it instead of `gin.Recovery()`, before
-or after `Middleware`. `ginprblm.Scope(mappers...)` attaches mappers to a route group only
+**Recovery and route groups:** `ginprblm.Recovery(opts...)` turns panics into the safe 500 problem
+and gives the panic value and stack to the `OnError` hook. Use it instead of `gin.Recovery()`,
+before or after `Middleware`, and pass both the same options so they share the hook, enrichers and
+namespace. `ginprblm.Scope(mappers...)` attaches mappers to a route group only
 (mirrored by `ExampleRecovery` and `ExampleScope`):
 
 ```go
+opts := []prblm.Option{prblm.OnError(logProblem)}
+
 engine := gin.New()
-engine.Use(ginprblm.Recovery(h), ginprblm.Middleware(h))
+engine.Use(ginprblm.Recovery(opts...), ginprblm.Middleware(opts...))
 engine.Group("/v1/contracts", ginprblm.Scope(prblm.Status(ErrLocked, http.StatusLocked))).
 	GET("/:id", func(c *gin.Context) { _ = c.Error(ErrLocked) }) // a 423 problem
 ```
@@ -281,14 +319,13 @@ go get github.com/kartaladev/prblm/fiberprblm
 ```
 
 `fiberprblm.ErrorHandler` is the application's error handler: every error a handler returns, and
-fiber's own 404 and 405, become problems (mirrored by `ExampleErrorHandler`):
+fiber's own 404 and 405, become problems. It takes the same options as `prblm.NewHandler`
+(mirrored by `ExampleErrorHandler`):
 
 ```go
-h := prblm.NewHandler(prblm.WithMappers(
+app := fiber.New(fiber.Config{ErrorHandler: fiberprblm.ErrorHandler(prblm.WithMappers(
 	prblm.Status(ErrVesselNotFound, http.StatusNotFound),
-))
-
-app := fiber.New(fiber.Config{ErrorHandler: fiberprblm.ErrorHandler(h)})
+))})
 app.Get("/v1/vessels/:id", func(fiber.Ctx) error {
 	return ErrVesselNotFound // written as a 404 problem
 })
@@ -305,7 +342,7 @@ stack in the `OnError` hook. With fiber's default error handler, the client gets
 attaches mappers to a route group only (mirrored by `ExampleRecovery` and `ExampleScope`):
 
 ```go
-app := fiber.New(fiber.Config{ErrorHandler: fiberprblm.ErrorHandler(h)})
+app := fiber.New(fiber.Config{ErrorHandler: fiberprblm.ErrorHandler(prblm.OnError(logProblem))})
 app.Use(fiberprblm.Recovery())
 app.Group("/v1/contracts", fiberprblm.Scope(prblm.Status(ErrLocked, http.StatusLocked))).
 	Get("/:id", func(fiber.Ctx) error { return ErrLocked }) // a 423 problem
@@ -324,7 +361,7 @@ themselves differ:
 | Body written before the error | kept; error only to the hook | kept; error only to the hook | buffered body **replaced** by the problem (nothing was sent yet); a stream is kept |
 | Streams and hijacked connections | kept; error only to the hook | kept; error only to the hook | a stream is kept; error only to the hook |
 | Client went away (`context.Canceled`) | answered; the write is dropped | nothing written; error only to the hook | nothing written; error only to the hook |
-| Panic recovery (opt-in) | `Handler.Recover` | `ginprblm.Recovery(h)` | `fiberprblm.Recovery()` with `ErrorHandler` |
+| Panic recovery (opt-in) | `Handler.Recover` | `ginprblm.Recovery(opts...)` | `fiberprblm.Recovery()` with `ErrorHandler` |
 | Ordering rule | — | `Middleware` before aborting middleware | — |
 
 ## Defaults
@@ -334,6 +371,9 @@ themselves differ:
 | Unmapped errors | 500 with title "Internal Server Error" and no detail | never leak internals | consumer mappers |
 | Built-in mappers | on | common request body errors get a correct 4xx without setup | `WithoutBuiltins()` |
 | `type` | `about:blank`, omitted from the document | the RFC 9457 default | set per problem |
+| Type namespace | none: types written as given | no change for code that writes full type URIs | `WithNamespace` |
+| Invalid relative type (with a namespace) | `about:blank`, and a note to the hook | a broken link is worse than none | — |
+| Types from the request host | never | the `Host` header is client-controlled | — |
 | `instance` | the request path, without the query string | identify the occurrence without leaking query tokens | an enricher, or set per problem |
 | Format | JSON, XML when the client prefers it | most clients read JSON | — |
 | `Cache-Control` | `no-store`, unless the handler or the problem sets one | caches must not replay an error | set the header |

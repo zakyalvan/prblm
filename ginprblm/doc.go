@@ -4,15 +4,13 @@
 //
 // # Quick start
 //
-// Install [Middleware] with a [prblm.Handler] and record errors with
-// c.Error, as gin handlers usually do:
-//
-//	h := prblm.NewHandler(prblm.WithMappers(
-//		prblm.Status(ErrVesselNotFound, http.StatusNotFound),
-//	))
+// Install [Middleware] with the same options [prblm.NewHandler] takes, and
+// record errors with c.Error, as gin handlers usually do:
 //
 //	engine := gin.New()
-//	engine.Use(ginprblm.Middleware(h))
+//	engine.Use(ginprblm.Middleware(prblm.WithMappers(
+//		prblm.Status(ErrVesselNotFound, http.StatusNotFound),
+//	)))
 //	engine.GET("/v1/vessels/:id", func(c *gin.Context) {
 //		vessel, err := loadVessel(c.Request.Context(), c.Param("id"))
 //		if err != nil {
@@ -23,8 +21,9 @@
 //	})
 //
 // Once the handlers after it have returned, the middleware resolves the last
-// recorded error with the handler, so mappers, enrichers, the OnError hook
-// and content negotiation behave exactly as with net/http.
+// recorded error with a problem handler built from those options, so
+// mappers, enrichers, the OnError hook and content negotiation behave
+// exactly as with net/http.
 //
 // # Aborts
 //
@@ -51,10 +50,13 @@
 //
 // Recovery is opt-in. [Recovery] turns a panic into the core's safe 500
 // problem and hands the panic value and stack to the OnError hook. Use it
-// instead of gin.Recovery(), before or after [Middleware]:
+// instead of gin.Recovery(), before or after [Middleware], with the same
+// options, so panics and errors share one hook and one set of enrichers:
+//
+//	opts := []prblm.Option{prblm.OnError(logProblem)}
 //
 //	engine := gin.New()
-//	engine.Use(ginprblm.Recovery(h), ginprblm.Middleware(h))
+//	engine.Use(ginprblm.Recovery(opts...), ginprblm.Middleware(opts...))
 //
 // # Safe defaults
 //
@@ -65,6 +67,7 @@
 // (for example on an error whose Unwrap method panics), the response is a
 // bare 500 without a body and the engine keeps serving.
 //
-// A nil problem handler is a programming mistake: [Middleware] panics when it
-// is created, so the mistake shows at startup.
+// A configuration mistake, such as an invalid option, is a programming
+// mistake: [Middleware] and [Recovery] panic when they are created, so it
+// shows at startup and never inside a request.
 package ginprblm

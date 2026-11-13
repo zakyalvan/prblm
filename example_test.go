@@ -303,3 +303,25 @@ func ExampleOnError() {
 	// answered 500 for: pq: connection refused
 	// {"title":"Internal Server Error","status":500,"instance":"/v1/vessels/7"}
 }
+
+func ExampleWithNamespace() {
+	errBlacklisted := errors.New("supplier is blacklisted")
+
+	// Business code names only the sub-type; the namespace makes it a URL.
+	blacklisted := prblm.WithMappers(prblm.Is(errBlacklisted, func(error) *prblm.Problem {
+		return prblm.New(http.StatusConflict, prblm.WithType("contracts/blacklisted-supplier"))
+	}))
+
+	for _, ns := range []string{"/v1/api/probs", "https://kartala.id/probs"} {
+		h := prblm.NewHandler(prblm.WithNamespace(ns), blacklisted)
+
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/v1/contracts", http.NoBody)
+		h.Write(rec, req, errBlacklisted)
+
+		fmt.Println(rec.Body.String())
+	}
+	// Output:
+	// {"type":"/v1/api/probs/contracts/blacklisted-supplier","status":409,"instance":"/v1/contracts"}
+	// {"type":"https://kartala.id/probs/contracts/blacklisted-supplier","status":409,"instance":"/v1/contracts"}
+}

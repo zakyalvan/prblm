@@ -22,12 +22,19 @@ type Handler struct {
 	enrichers []func(ctx context.Context, p *Problem)
 	// onError is the hook set with OnError, or nil.
 	onError func(ctx context.Context, err error, p *Problem)
+	// namespace is the checked namespace set with WithNamespace, without
+	// its trailing slash, or "" for none.
+	namespace string
 }
 
 // NewHandler returns a handler configured by opts. Nil options are ignored.
 // With no options it is ready to use: built-in mappers on, the instance set
 // to the request path, and a safe 500 for anything unrecognized. The handler
 // does not change after NewHandler returns and is safe for concurrent use.
+//
+// NewHandler panics when an option is invalid, such as a malformed
+// [WithNamespace]. That is a startup misconfiguration, so it fails when the
+// program starts rather than inside a request.
 func NewHandler(opts ...Option) *Handler {
 	h := &Handler{builtins: builtins}
 
@@ -81,11 +88,17 @@ func (h *Handler) Resolve(ctx context.Context, err error) *Problem {
 }
 
 // complete applies the steps every problem goes through after it is
-// matched: status normalization, title finalization and the enrichers.
+// matched: status normalization, title finalization, the enrichers and type
+// resolution. Types are resolved after the enrichers, so a type an enricher
+// sets is resolved too, and the title is finalized again at the end, for a
+// problem the enrichers or type resolution left as about:blank without one.
+// Enrichers see the title already finalized.
 func (h *Handler) complete(ctx context.Context, p *Problem) {
 	h.normalize(ctx, p)
 	p.finalize()
 	h.enrich(ctx, p)
+	h.resolveType(ctx, p)
+	p.finalize()
 }
 
 // normalize replaces a status outside 400–599 with 500. A missing status is

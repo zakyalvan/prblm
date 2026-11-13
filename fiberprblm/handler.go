@@ -12,19 +12,19 @@ import (
 
 // ErrorHandler returns a fiber error handler, for [fiber.Config], that
 // writes every error returned by a handler or middleware, and fiber's own
-// routing errors, as a problem response resolved by h.
+// routing errors, as a problem response.
+//
+// opts are the options of [prblm.NewHandler], which builds the problem
+// handler once, here: no options give the core's safe defaults, and an
+// invalid option panics at startup rather than inside a request.
 //
 // The code of a [*fiber.Error] in the chain is a status hint; its message is
 // never sent. A buffered body is replaced by the problem, while a body stream
 // is left alone, as is the response to a client that went away (the request
 // context is canceled and the error wraps [context.Canceled]); the error then
 // only reaches the [prblm.OnError] hook.
-//
-// ErrorHandler panics when h is nil.
-func ErrorHandler(h *prblm.Handler) fiber.ErrorHandler {
-	if h == nil {
-		panic("fiberprblm: ErrorHandler called with a nil problem handler; create it with prblm.NewHandler")
-	}
+func ErrorHandler(opts ...prblm.Option) fiber.ErrorHandler {
+	h := prblm.NewHandler(opts...)
 
 	return func(c fiber.Ctx, err error) error {
 		res, ok := respond(h, c, err)

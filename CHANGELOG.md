@@ -37,3 +37,7 @@ The first release, planned as v0.1.0.
   opt-in panic recovery with `Recover` and `PanicError`. `io.Copy` through `Wrap` keeps the
   underlying writer's `ReadFrom`, so net/http still uses sendfile.
 - `Parse`, which decodes a problem from an HTTP response, and `ErrNotProblem`.
+- `WithNamespace`, an application-wide namespace for problem types: relative sub-types such as
+  `contracts/blacklisted-supplier` are resolved under it, absolute URIs and paths are kept, and an
+  invalid relative type becomes `about:blank` with a hook note wrapping `ErrInvalidType`. Types are
+  never built from the request's `Host` header. `NewHandler` panics on an invalid namespace.
