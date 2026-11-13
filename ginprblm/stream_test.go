@@ -14,7 +14,6 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/kartaladev/prblm"
 	"github.com/kartaladev/prblm/ginprblm"
 )
 
@@ -131,7 +130,7 @@ func TestDeferredWriter_Hijack(t *testing.T) {
 
 		c.Next()
 	})
-	engine.Use(ginprblm.Middleware(prblm.NewHandler(hook.option())))
+	engine.Use(ginprblm.Middleware(hook.option()))
 	engine.GET("/x", func(c *gin.Context) {
 		conn, rw, err := c.Writer.Hijack()
 		if err != nil {

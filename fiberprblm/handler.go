@@ -12,7 +12,11 @@ import (
 
 // ErrorHandler returns a fiber error handler, for [fiber.Config], that
 // writes every error returned by a handler or middleware, and fiber's own
-// routing errors, as a problem response resolved by h.
+// routing errors, as a problem response.
+//
+// opts are the options of [prblm.NewHandler], which builds the problem
+// handler once, here: no options give the core's safe defaults, and an
+// invalid option panics at startup rather than inside a request.
 //
 // The code of a [*fiber.Error] in the chain is a status hint; its message is
 // never sent. A buffered body is replaced by the problem, while a body stream
@@ -20,13 +24,24 @@ import (
 // context is canceled and the error wraps [context.Canceled]); the error then
 // only reaches the [prblm.OnError] hook.
 //
-// ErrorHandler panics when h is nil.
-func ErrorHandler(h *prblm.Handler) fiber.ErrorHandler {
-	if h == nil {
-		panic("fiberprblm: ErrorHandler called with a nil problem handler; create it with prblm.NewHandler")
-	}
+// When opts register problem types (see [prblm.WithTypes]), ErrorHandler
+// also serves their documentation, exactly as [prblm.Handler.Discovery]
+// does, for GET and HEAD requests under the namespace path that reach it as
+// fiber's route-not-found error. A route registered at a documentation path
+// takes precedence, and a handler that returns fiber.ErrNotFound gets a 404
+// problem as usual. A path that has a route only for another method gets
+// fiber's 405 as a problem, not the documentation.
+func ErrorHandler(opts ...prblm.Option) fiber.ErrorHandler {
+	h := prblm.NewHandler(opts...)
+	// DiscoveryPath renders the documentation now, so a rendering failure
+	// shows at startup.
+	isDiscoveryOn := h.DiscoveryPath() != ""
 
 	return func(c fiber.Ctx, err error) error {
+		if isDiscoveryOn && isRouteNotFound(c, err) && serveDiscovery(h, c) {
+			return nil
+		}
+
 		res, ok := respond(h, c, err)
 		// Fiber sends nothing before the handler returns, so a buffered
 		// body is replaced. A body stream is the handler's own response, and

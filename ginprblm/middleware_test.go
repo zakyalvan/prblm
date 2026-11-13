@@ -3,7 +3,9 @@ package ginprblm_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -14,6 +16,89 @@ import (
 	"github.com/kartaladev/prblm"
 	"github.com/kartaladev/prblm/ginprblm"
 )
+
+// gin-adapter / Scenario: Options configure the middleware.
+func TestMiddleware_Options(t *testing.T) {
+	t.Parallel()
+
+	mapper := prblm.WithMappers(prblm.Status(ErrVesselNotFound, http.StatusNotFound))
+
+	tests := []struct {
+		name   string
+		opts   []prblm.Option
+		status int
+	}{
+		{name: "none", status: http.StatusInternalServerError},
+		{name: "mapper", opts: []prblm.Option{mapper}, status: http.StatusNotFound},
+		{name: "nil options around a mapper", opts: []prblm.Option{nil, mapper, nil}, status: http.StatusNotFound},
+		{name: "single nil", opts: []prblm.Option{nil}, status: http.StatusInternalServerError},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			engine := gin.New()
+			engine.Use(ginprblm.Middleware(tt.opts...))
+			engine.GET("/v1/vessels/:id", func(c *gin.Context) { _ = c.Error(ErrVesselNotFound) })
+
+			rec := serve(t, engine, get(t, "/v1/vessels/7"))
+
+			if rec.Code != tt.status {
+				t.Errorf("status = %d, want %d", rec.Code, tt.status)
+			}
+
+			if ct := rec.Header().Get("Content-Type"); ct != "application/problem+json" {
+				t.Errorf("Content-Type = %q, want application/problem+json", ct)
+			}
+		})
+	}
+}
+
+// gin-adapter / Scenario: Invalid options fail at construction.
+func TestMiddleware_InvalidOptions(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name        string
+		constructor func(...prblm.Option) gin.HandlerFunc
+		opts        []prblm.Option
+		named       string
+	}{
+		{
+			name:        "error middleware with a relative namespace",
+			constructor: ginprblm.Middleware,
+			opts:        []prblm.Option{prblm.WithNamespace("v1/api/probs")},
+			named:       "WithNamespace",
+		},
+		{
+			name:        "recovery middleware with a relative namespace",
+			constructor: ginprblm.Recovery,
+			opts:        []prblm.Option{prblm.WithNamespace("v1/api/probs")},
+			named:       "WithNamespace",
+		},
+		{
+			name:        "error middleware with types and no namespace",
+			constructor: ginprblm.Middleware,
+			opts:        []prblm.Option{prblm.WithTypes(OutOfCredit)},
+			named:       "WithTypes",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			defer func() {
+				if msg := fmt.Sprint(recover()); !strings.Contains(msg, tt.named) {
+					t.Errorf("panic = %q, want a message naming %s", msg, tt.named)
+				}
+			}()
+
+			tt.constructor(tt.opts...)
+		})
+	}
+}
 
 // gin-adapter / Scenario: Recorded errors.
 func TestMiddleware_RecordedErrors(t *testing.T) {
@@ -67,13 +152,11 @@ func TestMiddleware_RecordedErrors(t *testing.T) {
 
 			var hook hookRecorder
 
-			h := prblm.NewHandler(hook.option(), prblm.WithMappers(
+			engine := gin.New()
+			engine.Use(ginprblm.Middleware(hook.option(), prblm.WithMappers(
 				prblm.Status(ErrVesselNotFound, http.StatusNotFound),
 				prblm.Status(ErrLocked, http.StatusLocked),
-			))
-
-			engine := gin.New()
-			engine.Use(ginprblm.Middleware(h))
+			)))
 
 			if tt.middleware != nil {
 				engine.Use(tt.middleware)
@@ -115,9 +198,7 @@ func TestMiddleware_NoLeak(t *testing.T) {
 		t.Run(text, func(t *testing.T) {
 			t.Parallel()
 
-			engine := gin.New()
-			engine.Use(ginprblm.Middleware(prblm.NewHandler()))
-			engine.GET("/x", func(c *gin.Context) { _ = c.Error(errors.New(text)) })
+			engine := newEngine(func(c *gin.Context) { _ = c.Error(errors.New(text)) })
 
 			rec := serve(t, engine, get(t, "/x"))
 
@@ -168,9 +249,7 @@ func TestMiddleware_FaultyConsumer(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			engine := gin.New()
-			engine.Use(ginprblm.Middleware(prblm.NewHandler(tt.opts...)))
-			engine.GET("/x", func(c *gin.Context) { _ = c.Error(errX) })
+			engine := newEngine(func(c *gin.Context) { _ = c.Error(errX) }, tt.opts...)
 
 			// The second request shows the engine keeps serving.
 			for i := range 2 {
@@ -195,7 +274,7 @@ func TestMiddleware_FaultyConsumer_RespondPanics(t *testing.T) {
 	t.Parallel()
 
 	engine := gin.New()
-	engine.Use(ginprblm.Middleware(prblm.NewHandler()))
+	engine.Use(ginprblm.Middleware())
 	engine.GET("/x", func(c *gin.Context) {
 		// c.Error itself walks the chain, so record the error directly.
 		c.Errors = append(c.Errors, &gin.Error{Err: panickyUnwrapError{}, Type: gin.ErrorTypePrivate})
@@ -217,29 +296,15 @@ func TestMiddleware_FaultyConsumer_RespondPanics(t *testing.T) {
 	}
 }
 
-// gin-adapter / Scenario: Nil handler, error-middleware row.
-func TestMiddleware_NilHandler(t *testing.T) {
-	t.Parallel()
-
-	defer func() {
-		msg, _ := recover().(string)
-		if !strings.Contains(msg, "problem handler") {
-			t.Errorf("panic = %q, want a message naming the problem handler", msg)
-		}
-	}()
-
-	ginprblm.Middleware(nil)
-}
-
 // Slice 2 end to end: a recorded error becomes a problem over a real server,
 // with negotiation and the query string left out of the instance.
 func TestMiddleware_EndToEnd(t *testing.T) {
 	t.Parallel()
 
 	engine := gin.New()
-	engine.Use(ginprblm.Middleware(prblm.NewHandler(prblm.WithMappers(
+	engine.Use(ginprblm.Middleware(prblm.WithMappers(
 		prblm.Status(ErrVesselNotFound, http.StatusNotFound),
-	))))
+	)))
 	engine.GET("/v1/vessels/:id", func(c *gin.Context) { _ = c.Error(ErrVesselNotFound) })
 
 	srv := httptest.NewServer(engine)
@@ -290,7 +355,7 @@ func TestMiddleware_NilRecordedError(t *testing.T) {
 	t.Parallel()
 
 	engine := gin.New()
-	engine.Use(ginprblm.Middleware(prblm.NewHandler()))
+	engine.Use(ginprblm.Middleware())
 	engine.GET("/x", func(c *gin.Context) {
 		c.Status(http.StatusAccepted)
 		c.Errors = append(c.Errors, &gin.Error{Err: nil, Type: gin.ErrorTypePrivate})
@@ -317,7 +382,7 @@ func TestMiddleware_PanicPassesThrough(t *testing.T) {
 	engine.Use(gin.CustomRecoveryWithWriter(io.Discard, func(c *gin.Context, _ any) {
 		c.AbortWithStatus(http.StatusInternalServerError)
 	}))
-	engine.Use(ginprblm.Middleware(prblm.NewHandler()))
+	engine.Use(ginprblm.Middleware())
 	engine.GET("/x", func(*gin.Context) { panic("boom") })
 
 	if rec := serve(t, engine, get(t, "/x")); rec.Code != http.StatusInternalServerError {
@@ -332,9 +397,9 @@ func TestMiddleware_Concurrent(t *testing.T) {
 	const requests = 200
 
 	engine := gin.New()
-	engine.Use(ginprblm.Middleware(prblm.NewHandler(prblm.WithMappers(
+	engine.Use(ginprblm.Middleware(prblm.WithMappers(
 		prblm.Status(ErrVesselNotFound, http.StatusNotFound),
-	))))
+	)))
 	engine.GET("/a", func(c *gin.Context) { _ = c.Error(ErrVesselNotFound) })
 	engine.GET("/b", func(c *gin.Context) { c.AbortWithStatus(http.StatusUnauthorized) })
 
@@ -384,4 +449,55 @@ func TestMiddleware_Concurrent(t *testing.T) {
 	}
 
 	wg.Wait()
+}
+
+// problem-types / Scenario: Hostile host headers, through gin: the type
+// comes from the namespace only, never from the request's host.
+func TestMiddleware_HostHeaders(t *testing.T) {
+	t.Parallel()
+
+	errBlacklisted := errors.New("blacklisted")
+	blacklisted := prblm.WithMappers(prblm.Is(errBlacklisted, func(error) *prblm.Problem {
+		return prblm.New(http.StatusConflict, prblm.WithType("contracts/blacklisted-supplier"))
+	}))
+
+	tests := []struct {
+		name      string
+		namespace string
+		header    http.Header
+		rendered  string
+	}{
+		{
+			name: "host on a path namespace", namespace: "/v1/api/probs",
+			header: http.Header{"Host": {"evil.example"}}, rendered: "/v1/api/probs/contracts/blacklisted-supplier",
+		},
+		{
+			name: "forwarded headers on a path namespace", namespace: "/v1/api/probs",
+			header:   http.Header{"X-Forwarded-Host": {"evil.example"}, "X-Forwarded-Proto": {"http"}},
+			rendered: "/v1/api/probs/contracts/blacklisted-supplier",
+		},
+		{
+			name: "host on a uri namespace", namespace: "https://kartala.id/probs",
+			header: http.Header{"Host": {"evil.example"}}, rendered: "https://kartala.id/probs/contracts/blacklisted-supplier",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			engine := newEngine(func(c *gin.Context) { _ = c.Error(errBlacklisted) }, prblm.WithNamespace(tt.namespace), blacklisted)
+
+			req := get(t, "/x")
+			maps.Copy(req.Header, tt.header)
+
+			if host := tt.header.Get("Host"); host != "" {
+				req.Host = host
+			}
+
+			if got := parseRecorded(t, serve(t, engine, req)).Type; got != tt.rendered {
+				t.Errorf("type = %q, want %q", got, tt.rendered)
+			}
+		})
+	}
 }

@@ -43,11 +43,21 @@ func WithEnrichers(enrichers ...func(ctx context.Context, p *Problem)) Option {
 // Before that call, the hook may also receive notes about mistakes the
 // handler worked around: a [*PanicError] from consumer code that panicked
 // (with a nil problem), an error wrapping [ErrInvalidStatus] for a status
-// outside 400–599 that was replaced, or an error wrapping [ErrEncoding] for a
-// problem that could not be encoded. Use errors.Is and errors.As to tell
-// notes from the error being answered. The encoding note carries the problem
-// that failed to encode; the call that follows it carries the minimal 500
-// problem that was sent instead. A hook that panics is ignored.
+// outside 400–599 that was replaced, an error wrapping [ErrInvalidType] for a
+// relative type that is not a valid sub-type and was replaced by
+// about:blank, or that was sent unchanged because the handler has no
+// namespace, an error wrapping [ErrUndocumentedType] for a sub-type
+// without a registered definition while discovery is on, or an error
+// wrapping [ErrEncoding] for a problem that could not be encoded. Use
+// errors.Is and errors.As to tell notes from the error being answered. The
+// encoding note carries the problem that failed to encode; the call that
+// follows it carries the minimal 500 problem that was sent instead.
+//
+// One note arrives without an answered error: an error wrapping
+// [ErrShadowedDocumentation], with a nil problem, when an application route
+// hides type documentation (see [Handler.NoteShadowedRoute]). The request
+// it comes from succeeded, so no call follows it. A hook that panics is
+// ignored.
 func OnError(hook func(ctx context.Context, err error, p *Problem)) Option {
 	return func(h *Handler) {
 		h.onError = hook

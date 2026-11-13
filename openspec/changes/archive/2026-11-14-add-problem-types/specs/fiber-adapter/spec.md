@@ -27,6 +27,7 @@ The fiber error handler SHALL take the same options as the core handler construc
 |---------|-------|
 | `WithNamespace("v1/api/probs")` | `WithNamespace` |
 | `WithTypes(OutOfCredit)` without a namespace | `WithTypes` |
+| `WithNamespace("v1/api/probs")`, passed to the discovery middleware | `WithNamespace` |
 
 ### Requirement: Error handler serves type discovery on route-not-found
 When its options turn discovery on, the fiber error handler SHALL answer GET and HEAD requests under the namespace path that reach it as fiber's route-not-found error with the type documentation, exactly as the core discovery handler would. A route registered at such a path SHALL take precedence.
@@ -43,6 +44,7 @@ When its options turn discovery on, the fiber error handler SHALL answer GET and
 | no extra routes | `HEAD /v1/api/probs/out-of-credit` | status 200, `application/json`, empty body |
 | no extra routes | `GET /v1/api/probs` | status 200, the index with `out-of-credit` |
 | no extra routes | `GET /v1/api/probs/unknown` | a 404 `application/problem+json` problem |
+| no extra routes | `GET /v1/api/probs/%zz` | a 404 `application/problem+json` problem |
 | no extra routes | `GET /v1/api/probs/out-of-credit` with `If-None-Match` set to the `ETag` of a previous response | status 304, the same `ETag`, `Cache-Control: public, max-age=3600`, empty body |
 
 ##### Examples: not served
@@ -50,9 +52,29 @@ When its options turn discovery on, the fiber error handler SHALL answer GET and
 |-------|---------|----------|
 | a route `GET /v1/api/probs/out-of-credit` returning 200 `custom` | `GET /v1/api/probs/out-of-credit` | status 200, body `custom` |
 | a route `GET /v1/api/probs/out-of-credit` returning `fiber.ErrNotFound` | `GET /v1/api/probs/out-of-credit` | a 404 `application/problem+json` problem, not the documentation |
+| a route `POST /v1/api/probs/out-of-credit` | `GET /v1/api/probs/out-of-credit` | a 405 `application/problem+json` problem, not the documentation |
+| a route `GET /v1/api/probs/out-of-credit` returning 200 `custom` | `HEAD /v1/api/probs/out-of-credit` | status 200, the route's own headers, not the documentation (fiber registers HEAD with GET) |
 | no extra routes | `POST /v1/api/probs/out-of-credit` | a 404 `application/problem+json` problem, not the documentation |
 | no extra routes | `GET /v1/other/out-of-credit` | a 404 `application/problem+json` problem |
 | `WithoutDiscovery()` | `GET /v1/api/probs/out-of-credit` | a 404 `application/problem+json` problem |
+
+### Requirement: Discovery middleware reports shadowed documentation
+The fiber adapter SHALL offer an opt-in discovery middleware, installed with `app.Use` and taking the error handler's options. With discovery on, it SHALL report every request an endpoint route answers to the handler's shadowed-documentation check, with the route's path pattern. It SHALL change no response and SHALL return the error of the handlers after it unchanged.
+
+#### Scenario: Shadowed documentation through fiber
+- **Given** a fiber app whose error handler is the adapter, with namespace `/v1/api/probs`, the type `out-of-credit` registered, a hook that records calls and `<setup>`
+- **When** a client sends `<requests>`
+- **Then** the client receives `<received>`, and the hook receives `<notes>` notes wrapping `ErrShadowedDocumentation`
+
+##### Examples:
+| setup | requests | received | notes |
+|-------|----------|----------|-------|
+| the discovery middleware via `app.Use` and a route `GET /v1/api/probs/out-of-credit` returning 200 `custom` | `GET /v1/api/probs/out-of-credit` twice | status 200, body `custom` | 1, naming `/v1/api/probs/out-of-credit` |
+| the discovery middleware via `app.Use` and a route `GET /v1/api/probs/out-of-credit` returning 200 `custom` | `HEAD /v1/api/probs/out-of-credit` | status 200, empty body | 1 |
+| the discovery middleware via `app.Use` and a route `GET /v1/vessels/:id` returning 200 `custom` | `GET /v1/vessels/7` | status 200, body `custom` | 0 |
+| a route `GET /v1/api/probs/out-of-credit` returning 200 `custom`, no discovery middleware | `GET /v1/api/probs/out-of-credit` | status 200, body `custom` | 0 |
+| the discovery middleware via `app.Use` with `WithoutDiscovery()`, and a route `GET /v1/api/probs/out-of-credit` returning 200 `custom` | `GET /v1/api/probs/out-of-credit` | status 200, body `custom` | 0 |
+| the discovery middleware via `app.Use`, no routes | `GET /v1/api/probs/out-of-credit` | status 200, `application/json`, `type` `/v1/api/probs/out-of-credit` | 0 |
 
 ## MODIFIED Requirements
 

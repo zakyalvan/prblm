@@ -93,6 +93,20 @@ A GET or HEAD request under the namespace path that names no registered type SHA
 | `/v1/api/probs/contracts/%2e%2e/out-of-credit` |
 | `/v1/api/probs/contracts/blacklisted-supplier%00` |
 
+#### Scenario: Discovery problems never reach the hook
+- **Given** a handler with namespace `/v1/api/probs`, the type `contracts/blacklisted-supplier` registered, a hook that records calls and `<enricher>`, served by its discovery handler over net/http
+- **When** a client sends `<method> <path>`
+- **Then** the response status is `<status>`
+- **And** the hook was called 0 times, for neither a note nor an error
+
+##### Examples:
+| enricher | method | path | status |
+|----------|--------|------|--------|
+| an enricher that panics | `GET` | `/v1/api/probs/contracts/unknown` | 404 |
+| an enricher that panics | `POST` | `/v1/api/probs/contracts/blacklisted-supplier` | 405 |
+| an enricher adding an extension JSON cannot encode | `GET` | `/v1/api/probs/contracts/unknown` | 500 |
+| an enricher that sets type `Bad Type` | `GET` | `/v1/api/probs/contracts/unknown` | 404 |
+
 ### Requirement: Methods other than GET and HEAD are refused
 The discovery handler SHALL answer any method other than GET or HEAD with a 405 problem and `Allow: GET, HEAD`.
 
@@ -122,7 +136,7 @@ Documentation responses SHALL escape all definition text in HTML and JSON. They 
 |-------|-------------|--------|----------|--------|
 | `Locked` | `<script>alert(1)</script>` | HTML | `&lt;script&gt;alert(1)&lt;/script&gt;` | `<script>` |
 | `<img src=x onerror=alert(1)>` | `x` | HTML | `&lt;img src=x onerror=alert(1)&gt;` | `<img` |
-| `Locked` | `"quoted" & <tagged>` | JSON | `"\"quoted\" & <tagged>"` | `<tagged>` |
+| `Locked` | `"quoted" & <tagged>` | JSON | `"\"quoted\" \u0026 \u003ctagged\u003e"`, which decodes to the description | `<tagged>` |
 | `Locked` | `line one\nline two` | HTML | `line one` | `<script>` |
 
 #### Scenario: Security headers
@@ -155,7 +169,7 @@ Successful documentation and index responses SHALL carry `Cache-Control: public,
 ##### Examples: not cacheable
 | path | accept | status | caching |
 |------|--------|--------|---------|
-| `/v1/api/probs/unknown` | `text/html` | 404 | has no `Cache-Control` and no `ETag` |
+| `/v1/api/probs/unknown` | `text/html` | 404 | has the problem default `Cache-Control: no-store`, not `public, max-age=3600`, and no `ETag` |
 
 #### Scenario: Conditional requests
 - **Given** the handler above and the `ETag` `E` of the HTML documentation of `out-of-credit`
@@ -241,6 +255,72 @@ The handler SHALL expose its discovery path and an `http.Handler` serving discov
 | `GET /v1/api/probs/` | `/v1/api/probs/out-of-credit` | 200 |
 | `GET /v1/api/probs/` | `/v1/api/probs/` | 200 |
 | `GET /v1/api/probs/` | `/v1/contracts/7` | 200 (from the contract handler) |
+
+### Requirement: Discovery responses for adapters
+The handler SHALL expose one method that, given a request's method, escaped path, `Accept` and `If-None-Match`, returns the discovery response, or reports that the request is not for discovery. It is not for discovery when discovery is off, the method is not GET or HEAD, or the path is neither the discovery path nor under it. Every framework adapter SHALL decide and answer discovery requests through it, so the rule exists once.
+
+#### Scenario: Discovery response for a request
+- **Given** a handler with namespace `/v1/api/probs` and the type `out-of-credit` (403, `Out of credit`) registered, unless `<config>` says otherwise
+- **When** its discovery response is requested for `<method> <path>` with `Accept: application/json` and `If-None-Match: <if_none_match>`
+- **Then** the result is `<result>`
+
+##### Examples: for discovery
+| config | method | path | if_none_match | result |
+|--------|--------|------|---------------|--------|
+| (as given) | `GET` | `/v1/api/probs/out-of-credit` | (empty) | served: status 200, `application/json`, the type's JSON document |
+| (as given) | `HEAD` | `/v1/api/probs/out-of-credit` | (empty) | served: status 200, `application/json`, empty body |
+| (as given) | `GET` | `/v1/api/probs` | (empty) | served: status 200, the index |
+| (as given) | `GET` | `/v1/api/probs/` | (empty) | served: status 200, the index |
+| (as given) | `GET` | `/v1/api/probs/out-of-credit` | the JSON `ETag` | served: status 304, empty body |
+| (as given) | `GET` | `/v1/api/probs/unknown` | (empty) | served: a 404 `application/problem+json` problem |
+| (as given) | `GET` | `/v1/api/probs/out%2Dof-credit` | (empty) | served: a 404 `application/problem+json` problem |
+| (as given) | `GET` | `/v1/api/probs/%zz` | (empty) | served: a 404 `application/problem+json` problem |
+
+##### Examples: not for discovery
+| config | method | path | if_none_match | result |
+|--------|--------|------|---------------|--------|
+| (as given) | `POST` | `/v1/api/probs/out-of-credit` | (empty) | not for discovery |
+| (as given) | `GET` | `/v1/other/out-of-credit` | (empty) | not for discovery |
+| (as given) | `GET` | `/v1/api/probsx` | (empty) | not for discovery |
+| `WithoutDiscovery()` | `GET` | `/v1/api/probs/out-of-credit` | (empty) | not for discovery |
+| no types registered | `GET` | `/v1/api/probs/out-of-credit` | (empty) | not for discovery |
+
+#### Scenario: Pages rendered on first use
+- **Given** a handler with namespace `/v1/api/probs` and the type `out-of-credit` registered
+- **When** `<requests>` concurrent discovery responses are requested before any other use of discovery
+- **Then** every response is 200 with the same body and `ETag`
+
+##### Examples:
+| requests |
+|----------|
+| 1 |
+| 100 |
+
+### Requirement: Shadowed documentation is noted
+When an application route answers a GET or HEAD request for which discovery would have served a documentation page or the index, the handler SHALL give the OnError hook a note wrapping `ErrShadowedDocumentation` that names the route and the path, once per route, so the conflict is visible without the library logging. A request that discovery would answer with a 404, or would not answer, SHALL give no note. Framework adapters SHALL report through one handler method.
+
+#### Scenario: Shadowed documentation
+- **Given** a handler with namespace `/v1/api/probs`, the type `out-of-credit` registered unless `<config>` says otherwise, and a hook that records calls
+- **When** the application route `<route>` answers `<requests>`, each reported to the handler
+- **Then** the hook receives `<notes>` notes wrapping `ErrShadowedDocumentation`, each naming the route
+
+##### Examples: noted
+| config | route | requests | notes |
+|--------|-------|----------|-------|
+| (as given) | `/v1/api/probs/out-of-credit` | `GET /v1/api/probs/out-of-credit` | 1 |
+| (as given) | `/v1/api/probs/out-of-credit` | `GET /v1/api/probs/out-of-credit` twice | 1 |
+| (as given) | `/v1/api/probs/out-of-credit` | `HEAD /v1/api/probs/out-of-credit` | 1 |
+| (as given) | `/v1/api/probs` | `GET /v1/api/probs` | 1 |
+| (as given) | `/v1/api/probs/:name` | `GET /v1/api/probs/out-of-credit`, then `GET /v1/api/probs/unknown` | 1 |
+| (as given) | `/v1/api/probs/out-of-credit` and `/v1/api/probs` | one `GET` each | 2 |
+
+##### Examples: not noted
+| config | route | requests | notes |
+|--------|-------|----------|-------|
+| (as given) | `/v1/api/probs/:name` | `GET /v1/api/probs/unknown` | 0 |
+| (as given) | `/v1/other/:name` | `GET /v1/other/out-of-credit` | 0 |
+| (as given) | `/v1/api/probs/out-of-credit` | `POST /v1/api/probs/out-of-credit` | 0 |
+| `WithoutDiscovery()` | `/v1/api/probs/out-of-credit` | `GET /v1/api/probs/out-of-credit` | 0 |
 
 ### Requirement: Concurrent discovery requests
 Discovery SHALL be safe for concurrent use, and documentation SHALL be built from definitions that cannot change after the handler is created.

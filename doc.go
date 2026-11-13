@@ -43,6 +43,32 @@
 // Mappers, describers, enrichers and the hook may panic without breaking the
 // response: the panic is reported to the hook as a [*PanicError].
 //
+// # Problem types
+//
+// [WithNamespace] gives the application one namespace for its problem types,
+// so business code names only a sub-type, such as
+// "contracts/blacklisted-supplier", which is resolved under the namespace
+// when the problem is answered:
+//
+//	h := prblm.NewHandler(prblm.WithNamespace("/v1/api/probs"), mappers)
+//	// a type "contracts/blacklisted-supplier" is sent as
+//	// "/v1/api/probs/contracts/blacklisted-supplier"
+//
+// Absolute URIs, absolute paths and about:blank are kept. Any other relative
+// type becomes about:blank, titled with the status phrase, and the [OnError]
+// hook receives a note wrapping [ErrInvalidType]. Without a namespace, a
+// relative type is written as given, with the same note. Types are never
+// built from the request's Host header, which a client controls.
+//
+// [DefineType] defines a type once, with its status, title and description,
+// and [Type.New] builds its problems. Registered with [WithTypes], the
+// definitions are documented at their type URLs by [Handler.Discovery],
+// mounted at [Handler.DiscoveryPath]: an HTML page, or JSON for a client
+// that prefers it, and an index at the namespace path. Framework adapters
+// serve the same responses through [Handler.RespondDiscovery], and report
+// application routes that hide a page through [Handler.NoteShadowedRoute],
+// so the hook receives a note wrapping [ErrShadowedDocumentation].
+//
 // # Safe defaults
 //
 // A handler created without options is safe to use as is:

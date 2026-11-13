@@ -17,11 +17,60 @@ import (
 	"github.com/kartaladev/prblm/ginprblm"
 )
 
+// gin-adapter / Scenario: Shared options across middleware and recovery.
+func TestRecovery_Options(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		handler gin.HandlerFunc
+		status  int
+	}{
+		{
+			name:    "recorded error",
+			handler: func(c *gin.Context) { _ = c.Error(ErrVesselNotFound) },
+			status:  http.StatusNotFound,
+		},
+		{
+			name:    "panic",
+			handler: func(*gin.Context) { panic("boom") },
+			status:  http.StatusInternalServerError,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			var hook hookRecorder
+
+			opts := []prblm.Option{
+				prblm.WithMappers(prblm.Status(ErrVesselNotFound, http.StatusNotFound)),
+				hook.option(),
+			}
+
+			engine := gin.New()
+			engine.Use(ginprblm.Recovery(opts...), ginprblm.Middleware(opts...))
+			engine.GET("/v1/vessels/:id", tt.handler)
+
+			rec := serve(t, engine, get(t, "/v1/vessels/7"))
+
+			if rec.Code != tt.status {
+				t.Errorf("status = %d, want %d", rec.Code, tt.status)
+			}
+
+			if got := hook.received(); len(got) != 1 {
+				t.Errorf("hook called %d times (%v), want 1", len(got), got)
+			}
+		})
+	}
+}
+
 // gin-adapter / Scenario: Recovery placement, rows with recovery.
 func TestRecovery_Placement(t *testing.T) {
 	t.Parallel()
 
-	type constructor = func(*prblm.Handler) gin.HandlerFunc
+	type constructor = func(...prblm.Option) gin.HandlerFunc
 
 	tests := []struct {
 		name        string
@@ -56,11 +105,9 @@ func TestRecovery_Placement(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			h := prblm.NewHandler()
-
 			engine := gin.New()
 			for _, middleware := range tt.chain {
-				engine.Use(middleware(h))
+				engine.Use(middleware())
 			}
 
 			engine.GET("/x", func(*gin.Context) { panic("boom") })
@@ -115,7 +162,7 @@ func TestRecovery_Hook(t *testing.T) {
 
 	var hook hookRecorder
 
-	engine := newRecoveryEngine(loadVessel, prblm.NewHandler(hook.option()))
+	engine := newRecoveryEngine(loadVessel, hook.option())
 
 	serve(t, engine, get(t, "/x"))
 
@@ -143,7 +190,7 @@ func TestRecovery_Edge(t *testing.T) {
 
 		var hook hookRecorder
 
-		engine := newRecoveryEngine(func(*gin.Context) { panic(http.ErrAbortHandler) }, prblm.NewHandler(hook.option()))
+		engine := newRecoveryEngine(func(*gin.Context) { panic(http.ErrAbortHandler) }, hook.option())
 
 		rec := httptest.NewRecorder()
 
@@ -169,13 +216,11 @@ func TestRecovery_Edge(t *testing.T) {
 
 		var hook hookRecorder
 
-		engine := gin.New()
-		engine.Use(ginprblm.Recovery(prblm.NewHandler(hook.option())))
-		engine.GET("/x", func(c *gin.Context) {
+		engine := newRecoveryEngine(func(c *gin.Context) {
 			_, _ = c.Writer.WriteString(`{"partial":`)
 			c.Writer.Flush()
 			panic("boom")
-		})
+		}, hook.option())
 
 		rec := fetch(t, engine, "/x")
 
@@ -193,7 +238,7 @@ func TestRecovery_Edge(t *testing.T) {
 
 		broken := fmt.Errorf("write: %w", syscall.EPIPE)
 
-		engine := newRecoveryEngine(func(*gin.Context) { panic(broken) }, prblm.NewHandler(hook.option()))
+		engine := newRecoveryEngine(func(*gin.Context) { panic(broken) }, hook.option())
 
 		rec := serve(t, engine, get(t, "/x"))
 
@@ -207,9 +252,9 @@ func TestRecovery_Edge(t *testing.T) {
 	t.Run("enricher panics too", func(t *testing.T) {
 		t.Parallel()
 
-		h := prblm.NewHandler(prblm.WithEnrichers(func(context.Context, *prblm.Problem) { panic("enricher") }))
+		panickingEnricher := prblm.WithEnrichers(func(context.Context, *prblm.Problem) { panic("enricher") })
 
-		engine := newRecoveryEngine(func(*gin.Context) { panic("boom") }, h)
+		engine := newRecoveryEngine(func(*gin.Context) { panic("boom") }, panickingEnricher)
 		engine.GET("/ok", func(c *gin.Context) { c.String(http.StatusOK, "ok") })
 
 		rec := serve(t, engine, get(t, "/x"))
@@ -228,9 +273,9 @@ func TestRecovery_Edge(t *testing.T) {
 	t.Run("mapped panic value", func(t *testing.T) {
 		t.Parallel()
 
-		h := prblm.NewHandler(prblm.WithMappers(prblm.Status(ErrVesselNotFound, http.StatusNotFound)))
+		mapper := prblm.WithMappers(prblm.Status(ErrVesselNotFound, http.StatusNotFound))
 
-		engine := newRecoveryEngine(func(*gin.Context) { panic(ErrVesselNotFound) }, h)
+		engine := newRecoveryEngine(func(*gin.Context) { panic(ErrVesselNotFound) }, mapper)
 
 		rec := serve(t, engine, get(t, "/x"))
 
@@ -244,29 +289,13 @@ func TestRecovery_Edge(t *testing.T) {
 	})
 }
 
-// gin-adapter / Scenario: Nil handler, recovery row.
-func TestRecovery_NilHandler(t *testing.T) {
-	t.Parallel()
-
-	defer func() {
-		msg, _ := recover().(string)
-		if !strings.Contains(msg, "problem handler") {
-			t.Errorf("panic = %q, want a message naming the problem handler", msg)
-		}
-	}()
-
-	ginprblm.Recovery(nil)
-}
-
 // Slice 5 end to end: route-group scopes and recovered panics over a real
 // server, with Recovery and Middleware together.
 func TestRecovery_EndToEnd(t *testing.T) {
 	t.Parallel()
 
-	h := prblm.NewHandler()
-
 	engine := gin.New()
-	engine.Use(ginprblm.Recovery(h), ginprblm.Middleware(h))
+	engine.Use(ginprblm.Recovery(), ginprblm.Middleware())
 	contracts := engine.Group("/v1/contracts", ginprblm.Scope(prblm.Status(ErrLocked, http.StatusLocked)))
 	contracts.GET("/:id", func(c *gin.Context) { _ = c.Error(ErrLocked) })
 	contracts.GET("/:id/panic", func(c *gin.Context) {
@@ -315,7 +344,7 @@ func TestRecovery_Edge_WriterPanics(t *testing.T) {
 
 	var hook hookRecorder
 
-	engine := newRecoveryEngine(func(*gin.Context) { panic("boom") }, prblm.NewHandler(hook.option()))
+	engine := newRecoveryEngine(func(*gin.Context) { panic("boom") }, hook.option())
 
 	func() {
 		defer func() {

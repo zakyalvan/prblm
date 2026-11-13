@@ -41,7 +41,7 @@ The gin middleware and the recovery middleware SHALL each take the same options 
 | the error middleware | `WithTypes(OutOfCredit)` without a namespace | `WithTypes` |
 
 ### Requirement: Middleware serves type discovery for unclaimed paths
-When its options turn discovery on, the gin middleware installed on the engine SHALL answer GET and HEAD requests under the namespace path that no route claims with the type documentation, exactly as the core discovery handler would. A route registered at such a path SHALL take precedence.
+When its options turn discovery on, the gin middleware installed on the engine SHALL answer GET and HEAD requests under the namespace path that no route claims with the type documentation, exactly as the core discovery handler would. A route registered at such a path SHALL take precedence, including a route for another method when `engine.HandleMethodNotAllowed` is on, which keeps gin's 405.
 
 #### Scenario: Discovery through gin
 - **Given** a gin engine with `<setup>`, where the options set namespace `/v1/api/probs` and register the type `out-of-credit` (403, `Out of credit`)
@@ -57,6 +57,8 @@ When its options turn discovery on, the gin middleware installed on the engine S
 | the middleware via `engine.Use` | `GET /v1/api/probs/unknown` | a 404 `application/problem+json` problem |
 | the middleware via `engine.Use` | `GET /v1/api/probs/out-of-credit` with `If-None-Match` set to the `ETag` of a previous response | status 304, the same `ETag`, `Cache-Control: public, max-age=3600`, empty body |
 | the middleware via `engine.Use` and `engine.NoRoute` returning 404 `custom` | `GET /v1/api/probs/out-of-credit` | status 200, `application/json`, `type` `/v1/api/probs/out-of-credit` |
+| the middleware via `engine.Use` and `engine.HandleMethodNotAllowed = true` | `GET /v1/api/probs/out-of-credit` | status 200, `application/json`, `type` `/v1/api/probs/out-of-credit` |
+| the middleware via `engine.Use` and a route `GET /v1/api/probs/out-of-credit` returning 200 `custom` | `HEAD /v1/api/probs/out-of-credit` | status 200, `application/json`, empty body |
 
 ##### Examples: not served
 | setup | request | received |
@@ -67,6 +69,24 @@ When its options turn discovery on, the gin middleware installed on the engine S
 | the middleware via `engine.Use` and `WithoutDiscovery()` | `GET /v1/api/probs/out-of-credit` | status 404, not the documentation |
 | the middleware only on the group `/v1/vessels` | `GET /v1/api/probs/out-of-credit` | status 404, not the documentation |
 | the middleware via `engine.Use` and `engine.NoRoute` returning 404 `custom` | `GET /v1/other/out-of-credit` | status 404, body `custom` |
+| the middleware via `engine.Use`, `engine.HandleMethodNotAllowed = true` and a route `POST /v1/api/probs/out-of-credit` | `GET /v1/api/probs/out-of-credit` | status 405, not the documentation |
+| the middleware via `engine.Use`, `engine.HandleMethodNotAllowed = true` and a route `POST /v1/api/probs` | `GET /v1/api/probs` | status 405, not the index |
+
+### Requirement: Middleware reports shadowed documentation
+When its options turn discovery on, the gin middleware SHALL report every request a route answers to the handler's shadowed-documentation check, with the route's pattern (`c.FullPath()`), so the hook receives the note of type-discovery "Shadowed documentation is noted". The response SHALL be unchanged.
+
+#### Scenario: Shadowed documentation through gin
+- **Given** a gin engine using the middleware via `engine.Use` with namespace `/v1/api/probs`, the type `out-of-credit` registered, a hook that records calls and `<setup>`
+- **When** a client sends `<requests>`
+- **Then** each response is the route's own, and the hook receives `<notes>` notes wrapping `ErrShadowedDocumentation`
+
+##### Examples:
+| setup | requests | notes |
+|-------|----------|-------|
+| a route `GET /v1/api/probs/out-of-credit` returning 200 `custom` | `GET /v1/api/probs/out-of-credit` twice | 1, naming `/v1/api/probs/out-of-credit` |
+| a route `GET /v1/api/probs/:name` returning 200 `custom` | `GET /v1/api/probs/out-of-credit` | 1, naming `/v1/api/probs/:name` |
+| a route `GET /v1/vessels/:id` returning 200 `custom` | `GET /v1/vessels/7` | 0 |
+| a route `GET /v1/api/probs/out-of-credit` returning 200 `custom` and `WithoutDiscovery()` | `GET /v1/api/probs/out-of-credit` | 0 |
 
 ## MODIFIED Requirements
 

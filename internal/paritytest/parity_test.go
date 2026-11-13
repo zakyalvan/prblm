@@ -17,39 +17,66 @@ import (
 	"github.com/kartaladev/prblm/ginprblm"
 )
 
-var errVesselNotFound = errors.New("vessel not found")
+var (
+	errVesselNotFound = errors.New("vessel not found")
+	errBlacklisted    = errors.New("supplier is blacklisted")
+)
+
+// blacklistedSupplier is the one registered type definition.
+var blacklistedSupplier = prblm.DefineType(
+	"contracts/blacklisted-supplier",
+	http.StatusConflict,
+	"Supplier is blacklisted",
+	"The supplier is on the procurement blacklist.",
+)
 
 // returned holds the errors every server raises the same way. A panic and a
 // status hint are raised in each framework's own way, which is what parity
 // is about, so each server handles those cases itself.
 var returned = map[string]error{
-	caseMapped:   errVesselNotFound,
-	caseUnmapped: errors.New("pq: password=hunter2"),
+	caseMapped:      errVesselNotFound,
+	caseUnmapped:    errors.New("pq: password=hunter2"),
+	caseBlacklisted: errBlacklisted,
 }
 
 // Each case is selected with the query parameter "case", which the
 // problem's instance leaves out.
 const (
-	caseMapped   = "mapped"
-	caseUnmapped = "unmapped"
-	casePanic    = "panic"
-	caseHint     = "hint"
+	caseMapped      = "mapped"
+	caseUnmapped    = "unmapped"
+	casePanic       = "panic"
+	caseHint        = "hint"
+	caseBlacklisted = "blacklisted"
 )
 
-// newHandler is the one configured handler all three servers share.
-func newHandler() *prblm.Handler {
-	return prblm.NewHandler(
-		prblm.WithMappers(prblm.Status(errVesselNotFound, http.StatusNotFound)),
+// The paths the servers answer the cases at, and the documentation paths.
+const (
+	pathVessel      = "/v1/vessels/7"
+	pathContract    = "/v1/contracts/7"
+	pathTypeDoc     = "/v1/api/probs/contracts/blacklisted-supplier"
+	pathUnknownType = "/v1/api/probs/contracts/unknown"
+)
+
+// newOptions is the one configuration all three servers are built from.
+func newOptions() []prblm.Option {
+	return []prblm.Option{
+		prblm.WithNamespace("/v1/api/probs"),
+		prblm.WithTypes(blacklistedSupplier),
+		prblm.WithMappers(
+			prblm.Status(errVesselNotFound, http.StatusNotFound),
+			prblm.Is(errBlacklisted, func(error) *prblm.Problem { return blacklistedSupplier.New() }),
+		),
 		prblm.WithEnrichers(func(_ context.Context, p *prblm.Problem) { _ = p.Set("trace_id", "t1") }),
-	)
+	}
 }
 
 // netHTTPServer serves the cases through the net/http adapter.
-func netHTTPServer(t *testing.T, h *prblm.Handler) string {
+func netHTTPServer(t *testing.T, opts []prblm.Option) string {
 	t.Helper()
 
-	mux := http.NewServeMux()
-	mux.Handle("GET /v1/vessels/{id}", h.Recover(h.Wrap(func(_ http.ResponseWriter, r *http.Request) error {
+	h := prblm.NewHandler(opts...)
+
+	handler := h.Recover(h.Wrap(func(_ http.ResponseWriter, r *http.Request) error {
 		switch name := r.URL.Query().Get("case"); name {
 		case casePanic:
 			panic("boom")
@@ -58,23 +85,26 @@ func netHTTPServer(t *testing.T, h *prblm.Handler) string {
 		default:
 			return returned[name]
 		}
-	})))
+	}))
 
-	srv := httptest.NewServer(mux)
-	t.Cleanup(srv.Close)
+	mux := http.NewServeMux()
+	mux.Handle("GET /v1/vessels/{id}", handler)
+	mux.Handle("GET /v1/contracts/{id}", handler)
+	mux.Handle("GET "+h.DiscoveryPath()+"/", h.Discovery())
 
-	return srv.URL
+	return serve(t, mux)
 }
 
 // ginServer serves the cases through the gin adapter.
-func ginServer(t *testing.T, h *prblm.Handler) string {
+func ginServer(t *testing.T, opts []prblm.Option) string {
 	t.Helper()
 
 	gin.SetMode(gin.TestMode)
 
 	engine := gin.New()
-	engine.Use(ginprblm.Recovery(h), ginprblm.Middleware(h))
-	engine.GET("/v1/vessels/:id", func(c *gin.Context) {
+	engine.Use(ginprblm.Recovery(opts...), ginprblm.Middleware(opts...))
+
+	handler := func(c *gin.Context) {
 		switch name := c.Query("case"); name {
 		case casePanic:
 			panic("boom")
@@ -83,21 +113,31 @@ func ginServer(t *testing.T, h *prblm.Handler) string {
 		default:
 			_ = c.Error(returned[name])
 		}
-	})
+	}
+	engine.GET("/v1/vessels/:id", handler)
+	engine.GET("/v1/contracts/:id", handler)
 
-	srv := httptest.NewServer(engine)
+	return serve(t, engine)
+}
+
+// serve serves handler over a real server for the test and returns its URL.
+func serve(t *testing.T, handler http.Handler) string {
+	t.Helper()
+
+	srv := httptest.NewServer(handler)
 	t.Cleanup(srv.Close)
 
 	return srv.URL
 }
 
 // fiberServer serves the cases through the fiber adapter.
-func fiberServer(t *testing.T, h *prblm.Handler) string {
+func fiberServer(t *testing.T, opts []prblm.Option) string {
 	t.Helper()
 
-	app := fiber.New(fiber.Config{ErrorHandler: fiberprblm.ErrorHandler(h)})
+	app := fiber.New(fiber.Config{ErrorHandler: fiberprblm.ErrorHandler(opts...)})
 	app.Use(fiberprblm.Recovery())
-	app.Get("/v1/vessels/:id", func(c fiber.Ctx) error {
+
+	handler := func(c fiber.Ctx) error {
 		switch name := c.Query("case"); name {
 		case casePanic:
 			panic("boom")
@@ -106,7 +146,9 @@ func fiberServer(t *testing.T, h *prblm.Handler) string {
 		default:
 			return returned[name]
 		}
-	})
+	}
+	app.Get("/v1/vessels/:id", handler)
+	app.Get("/v1/contracts/:id", handler)
 
 	var lc net.ListenConfig
 
@@ -130,11 +172,12 @@ type observed struct {
 	status      int
 }
 
-// fetch sends the case to base with accept and records what parity covers.
-func fetch(t *testing.T, client *http.Client, base, caseName, accept string) observed {
+// fetch sends the case to base at path with accept and records what parity
+// covers.
+func fetch(t *testing.T, client *http.Client, base, path, caseName, accept string) observed {
 	t.Helper()
 
-	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, base+"/v1/vessels/7?case="+caseName, http.NoBody)
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, base+path+"?case="+caseName, http.NoBody)
 	if err != nil {
 		t.Fatalf("new request: %v", err)
 	}
@@ -168,46 +211,80 @@ func fetch(t *testing.T, client *http.Client, base, caseName, accept string) obs
 func TestParity(t *testing.T) {
 	t.Parallel()
 
-	h := newHandler()
+	opts := newOptions()
 
 	// Idle connections are closed before the servers stop; fiber's
 	// shutdown would otherwise wait for them.
 	client := &http.Client{Transport: &http.Transport{}}
 
 	servers := map[string]string{
-		"net/http": netHTTPServer(t, h),
-		"gin":      ginServer(t, h),
-		"fiber":    fiberServer(t, h),
+		"net/http": netHTTPServer(t, opts),
+		"gin":      ginServer(t, opts),
+		"fiber":    fiberServer(t, opts),
 	}
 
 	t.Cleanup(client.CloseIdleConnections)
 
 	tests := []struct {
 		name        string
+		path        string
 		caseName    string
 		accept      string
+		contains    string
 		status      int
 		contentType string
 	}{
-		{name: "mapped error", caseName: caseMapped, status: http.StatusNotFound, contentType: "application/problem+json"},
-		{name: "unmapped error", caseName: caseUnmapped, status: http.StatusInternalServerError, contentType: "application/problem+json"},
-		{name: "panic under recovery", caseName: casePanic, status: http.StatusInternalServerError, contentType: "application/problem+json"},
-		{name: "mapped error as xml", caseName: caseMapped, accept: "application/problem+xml", status: http.StatusNotFound, contentType: "application/problem+xml"},
-		{name: "status hint", caseName: caseHint, status: http.StatusForbidden, contentType: "application/problem+json"},
+		{name: "mapped error", path: pathVessel, caseName: caseMapped, status: http.StatusNotFound, contentType: "application/problem+json"},
+		{name: "unmapped error", path: pathVessel, caseName: caseUnmapped, status: http.StatusInternalServerError, contentType: "application/problem+json"},
+		{name: "panic under recovery", path: pathVessel, caseName: casePanic, status: http.StatusInternalServerError, contentType: "application/problem+json"},
+		{name: "mapped error as xml", path: pathVessel, caseName: caseMapped, accept: "application/problem+xml", status: http.StatusNotFound, contentType: "application/problem+xml"},
+		{name: "status hint", path: pathVessel, caseName: caseHint, status: http.StatusForbidden, contentType: "application/problem+json"},
+		{
+			name:        "resolved type",
+			path:        pathContract,
+			caseName:    caseBlacklisted,
+			contains:    `"type":"/v1/api/probs/contracts/blacklisted-supplier","title":"Supplier is blacklisted"`,
+			status:      http.StatusConflict,
+			contentType: "application/problem+json",
+		},
+		{
+			name:        "documentation as json",
+			path:        pathTypeDoc,
+			accept:      "application/json",
+			contains:    `"description":"The supplier is on the procurement blacklist."`,
+			status:      http.StatusOK,
+			contentType: "application/json",
+		},
+		{
+			name:        "documentation as html",
+			path:        pathTypeDoc,
+			accept:      "text/html",
+			contains:    "<title>Supplier is blacklisted</title>",
+			status:      http.StatusOK,
+			contentType: "text/html; charset=utf-8",
+		},
+		{
+			name:        "unknown type",
+			path:        pathUnknownType,
+			contains:    `"title":"Not Found"`,
+			status:      http.StatusNotFound,
+			contentType: "application/problem+json",
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			want := fetch(t, client, servers["net/http"], tt.caseName, tt.accept)
+			want := fetch(t, client, servers["net/http"], tt.path, tt.caseName, tt.accept)
 
-			if want.status != tt.status || want.contentType != tt.contentType || want.vary != "Accept" {
-				t.Fatalf("net/http sent %d %q Vary %q, want %d %q Vary Accept", want.status, want.contentType, want.vary, tt.status, tt.contentType)
+			if want.status != tt.status || want.contentType != tt.contentType || want.vary != "Accept" || !strings.Contains(want.body, tt.contains) {
+				t.Fatalf("net/http sent %d %q Vary %q %s, want %d %q Vary Accept containing %s",
+					want.status, want.contentType, want.vary, want.body, tt.status, tt.contentType, tt.contains)
 			}
 
 			for _, name := range []string{"gin", "fiber"} {
-				if got := fetch(t, client, servers[name], tt.caseName, tt.accept); got != want {
+				if got := fetch(t, client, servers[name], tt.path, tt.caseName, tt.accept); got != want {
 					t.Errorf("%s differs from net/http:\n got  %+v\n want %+v", name, got, want)
 				}
 			}

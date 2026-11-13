@@ -22,6 +22,9 @@ var (
 	ErrLocked         = errors.New("locked")
 )
 
+// OutOfCredit is the type definition of the adapter scenarios.
+var OutOfCredit = prblm.DefineType("out-of-credit", http.StatusForbidden, "Out of credit", "")
+
 // hookRecorder records the errors an OnError hook receives.
 type hookRecorder struct {
 	errs []error
@@ -62,7 +65,7 @@ func assertHook(t *testing.T, hook *hookRecorder, want error) {
 // newApp returns a fiber app whose error handler is the adapter with a
 // problem handler built from opts.
 func newApp(opts ...prblm.Option) *fiber.App {
-	return fiber.New(fiber.Config{ErrorHandler: fiberprblm.ErrorHandler(prblm.NewHandler(opts...))})
+	return fiber.New(fiber.Config{ErrorHandler: fiberprblm.ErrorHandler(opts...)})
 }
 
 // response is a fiber response read in full.

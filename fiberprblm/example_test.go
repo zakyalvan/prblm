@@ -16,11 +16,9 @@ import (
 func ExampleErrorHandler() {
 	errVesselNotFound := errors.New("vessel not found")
 
-	h := prblm.NewHandler(prblm.WithMappers(
+	app := fiber.New(fiber.Config{ErrorHandler: fiberprblm.ErrorHandler(prblm.WithMappers(
 		prblm.Status(errVesselNotFound, http.StatusNotFound),
-	))
-
-	app := fiber.New(fiber.Config{ErrorHandler: fiberprblm.ErrorHandler(h)})
+	))})
 	app.Get("/v1/vessels/:id", func(fiber.Ctx) error {
 		return errVesselNotFound // written as a problem response
 	})
@@ -46,13 +44,13 @@ func ExampleErrorHandler() {
 }
 
 func ExampleRecovery() {
-	h := prblm.NewHandler(prblm.OnError(func(_ context.Context, err error, _ *prblm.Problem) {
+	logProblem := func(_ context.Context, err error, _ *prblm.Problem) {
 		if pe, ok := errors.AsType[*prblm.PanicError](err); ok {
 			fmt.Println("hook:", pe.Value) // log the value and pe.Stack here
 		}
-	}))
+	}
 
-	app := fiber.New(fiber.Config{ErrorHandler: fiberprblm.ErrorHandler(h)})
+	app := fiber.New(fiber.Config{ErrorHandler: fiberprblm.ErrorHandler(prblm.OnError(logProblem))})
 	app.Use(fiberprblm.Recovery())
 	app.Get("/v1/vessels/:id", func(fiber.Ctx) error {
 		panic("db password=hunter2")
@@ -79,7 +77,7 @@ func ExampleRecovery() {
 func ExampleScope() {
 	errLocked := errors.New("locked")
 
-	app := fiber.New(fiber.Config{ErrorHandler: fiberprblm.ErrorHandler(prblm.NewHandler())})
+	app := fiber.New(fiber.Config{ErrorHandler: fiberprblm.ErrorHandler()})
 	app.Group("/v1/contracts", fiberprblm.Scope(prblm.Status(errLocked, http.StatusLocked))).
 		Get("/:id", func(fiber.Ctx) error { return errLocked })
 	app.Get("/v1/vessels/:id", func(fiber.Ctx) error { return errLocked })
@@ -101,4 +99,75 @@ func ExampleScope() {
 	// Output:
 	// /v1/contracts/1 423
 	// /v1/vessels/1 500
+}
+
+func ExampleErrorHandler_discovery() {
+	outOfCredit := prblm.DefineType("out-of-credit", http.StatusForbidden, "Out of credit",
+		"The account balance is below the price of the request.")
+
+	// The error handler also serves the documentation of the registered
+	// types for paths that reach it as fiber's route-not-found error.
+	app := fiber.New(fiber.Config{ErrorHandler: fiberprblm.ErrorHandler(
+		prblm.WithNamespace("/v1/api/probs"),
+		prblm.WithTypes(outOfCredit),
+	)})
+
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/v1/api/probs/out-of-credit", http.NoBody)
+	req.Header.Set("Accept", "application/json")
+
+	res, err := app.Test(req)
+	if err != nil {
+		fmt.Println(err)
+
+		return
+	}
+
+	body, _ := io.ReadAll(res.Body)
+	_ = res.Body.Close()
+
+	fmt.Println(res.StatusCode, res.Header.Get("Content-Type"))
+	fmt.Println(string(body))
+	// Output:
+	// 200 application/json
+	// {"type":"/v1/api/probs/out-of-credit","subtype":"out-of-credit","status":403,"title":"Out of credit","description":"The account balance is below the price of the request."}
+}
+
+func ExampleDiscovery() {
+	outOfCredit := prblm.DefineType("out-of-credit", http.StatusForbidden, "Out of credit", "")
+	logProblem := func(_ context.Context, err error, _ *prblm.Problem) {
+		if errors.Is(err, prblm.ErrShadowedDocumentation) {
+			fmt.Println("hook:", err)
+		}
+	}
+
+	opts := []prblm.Option{
+		prblm.WithNamespace("/v1/api/probs"),
+		prblm.WithTypes(outOfCredit),
+		prblm.OnError(logProblem),
+	}
+
+	app := fiber.New(fiber.Config{ErrorHandler: fiberprblm.ErrorHandler(opts...)})
+	app.Use(fiberprblm.Discovery(opts...))
+	// This route hides the documentation of out-of-credit.
+	app.Get("/v1/api/probs/:name", func(c fiber.Ctx) error { return c.SendString("custom") })
+
+	for range 2 {
+		req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/v1/api/probs/out-of-credit", http.NoBody)
+
+		res, err := app.Test(req)
+		if err != nil {
+			fmt.Println(err)
+
+			return
+		}
+
+		body, _ := io.ReadAll(res.Body)
+		_ = res.Body.Close()
+
+		fmt.Println(res.StatusCode, string(body))
+	}
+	// Output:
+	// hook: prblm: an application route hides type documentation: route "/v1/api/probs/:name" hides "/v1/api/probs/out-of-credit"
+	// 200 custom
+	// 200 custom
 }

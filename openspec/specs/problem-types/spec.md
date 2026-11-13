@@ -1,10 +1,10 @@
-# Spec Delta
+# problem-types Specification
 
 ## Purpose
 
 Defines how an application gives its problem types one namespace, names them by short sub-types in business code, and declares each type once with its status, title and description.
 
-## ADDED Requirements
+## Requirements
 
 ### Requirement: Relative sub-types resolve against the namespace
 When a handler has a namespace, finalizing a problem SHALL turn a type that is a relative sub-type into the namespace, a `/`, and the sub-type. Absolute URIs, absolute paths and `about:blank` SHALL be kept unchanged.
@@ -33,20 +33,46 @@ When a handler has a namespace, finalizing a problem SHALL turn a type that is a
 | `/v1/api/probs` | `urn:kartala:probs:x` | `urn:kartala:probs:x` |
 
 ### Requirement: Without a namespace, types are passed through
-A handler without a namespace SHALL write every type exactly as the problem carries it, including relative references, so existing behavior is unchanged.
+A handler without a namespace SHALL write every type exactly as the problem carries it, including relative references, so existing output is unchanged. For a relative type (not empty, without a scheme, not starting with `/`) the hook SHALL receive a note wrapping `ErrInvalidType`, because a client resolves it against the request URL.
 
 #### Scenario: No namespace
-- **Given** a handler with zero configuration and a mapper returning a 409 problem with type `<given>`
+- **Given** a handler with no namespace, a hook that records calls, and a mapper returning a 409 problem with type `<given>`
 - **When** the mapper matches a request
 - **Then** the problem's `type` member is `<rendered>`
-- **And** the hook receives no type note
+- **And** the hook `<note>` a note wrapping `ErrInvalidType`
 
 ##### Examples:
-| given | rendered |
-|-------|----------|
-| `contracts/blacklisted-supplier` | `contracts/blacklisted-supplier` |
-| `Contracts/X` | `Contracts/X` |
-| `https://example.com/probs/x` | `https://example.com/probs/x` |
+| given | rendered | note |
+|-------|----------|------|
+| `contracts/blacklisted-supplier` | `contracts/blacklisted-supplier` | receives |
+| `Contracts/X` | `Contracts/X` | receives |
+| `https://example.com/probs/x` | `https://example.com/probs/x` | does not receive |
+| `/other/probs/x` | `/other/probs/x` | does not receive |
+| `about:blank` | (none) | does not receive |
+| (empty) | (none) | does not receive |
+
+#### Scenario: Problem from a definition without a namespace
+- **Given** a handler with no namespace and a hook that records calls
+- **When** a mapper returns `DefineType("out-of-credit", 403, "Out of credit", "").New()` for `GET /v1/orders/42`
+- **Then** the problem's `type` member is `out-of-credit`
+- **And** the hook receives a note wrapping `ErrInvalidType` before the error being answered
+
+##### Examples:
+| hook |
+|------|
+| records calls |
+
+#### Scenario: Type notes cost nothing without a hook
+- **Given** a handler with `<config>` and no hook
+- **When** a problem with type `<given>` is resolved
+- **Then** resolving it allocates no more than resolving the same problem with type `about:blank`
+
+##### Examples:
+| config | given |
+|--------|-------|
+| no namespace | `contracts/x` |
+| namespace `/v1/api/probs` | `Bad Type` |
+| namespace `/v1/api/probs` and type `contracts/blacklisted-supplier` registered | `contracts/unknown` |
 
 ### Requirement: Types never come from the request host
 Type resolution SHALL use only the configured namespace. The request's `Host` header, `X-Forwarded-*` headers and URL SHALL NOT affect the `type` member.
@@ -64,7 +90,7 @@ Type resolution SHALL use only the configured namespace. The request's `Host` he
 | `https://kartala.id/probs` | `Host: evil.example` | `https://kartala.id/probs/contracts/blacklisted-supplier` |
 
 ### Requirement: Invalid namespaces are rejected at construction
-Creating a handler with a namespace that is neither an absolute `http`/`https` URI with a host nor an absolute path SHALL panic with a message naming `WithNamespace`. The namespace SHALL have a non-root path, and no query, fragment, user info, or `.` or `..` segment.
+Creating a handler with a namespace that is neither an absolute `http`/`https` URI with a host nor an absolute path SHALL panic with a message naming `WithNamespace`. The namespace SHALL have a non-root path, and no query, fragment, user info, or `.` or `..` segment. When several `WithNamespace` options are given, the last SHALL replace the earlier ones, and only it SHALL be validated.
 
 #### Scenario: Namespace validated
 - **When** a handler is created with `WithNamespace(<namespace>)`
@@ -95,13 +121,24 @@ Creating a handler with a namespace that is neither an absolute `http`/`https` U
 | `"/v1/../probs"` | panics naming `WithNamespace` |
 | `"/v1/api probs"` | panics naming `WithNamespace` |
 
+#### Scenario: Namespace option order
+- **When** a handler is created with `<options>`
+- **Then** construction `<outcome>` and the namespace in use is `<namespace>`
+
+##### Examples:
+| options | outcome | namespace |
+|---------|---------|-----------|
+| `WithNamespace("bad"), WithNamespace("/v1/api/probs")` | succeeds | `/v1/api/probs` |
+| `WithNamespace("/a/probs"), WithNamespace("/v1/api/probs")` | succeeds | `/v1/api/probs` |
+| `WithNamespace("/v1/api/probs"), WithNamespace("bad")` | panics naming `WithNamespace` | (none) |
+
 ### Requirement: Invalid relative types fall back to about:blank
-With a namespace, a relative type that is not a valid sub-type SHALL be replaced by `about:blank` (no `type` member). The status, title and detail SHALL be kept, and the hook SHALL receive a note wrapping `ErrInvalidType`. A valid sub-type is one or more `/`-separated segments of lowercase letters and digits, with single `-`, `_` or `.` between them.
+With a namespace, a relative type that is not a valid sub-type SHALL be replaced by `about:blank` (no `type` member). The title SHALL become the status phrase, as RFC 9457 section 4.2.1 asks for `about:blank`, so a title written for the lost type is not sent. The status and detail SHALL be kept, and the hook SHALL receive a note wrapping `ErrInvalidType`. A valid sub-type is one or more `/`-separated segments of lowercase letters and digits, with single `-`, `_` or `.` between them.
 
 #### Scenario: Invalid relative type
-- **Given** a handler with namespace `/v1/api/probs` and `<source>` setting type `<given>` on a 409 problem titled `Locked`
+- **Given** a handler with namespace `/v1/api/probs` and `<source>` setting type `<given>` on a 409 problem titled `Locked` with detail `Contract 7 is locked.`
 - **When** the problem is answered
-- **Then** the response has status 409, title `Locked` and no `type` member
+- **Then** the response has status 409, title `Conflict`, detail `Contract 7 is locked.` and no `type` member
 - **And** the hook receives a note wrapping `ErrInvalidType` before the error being answered
 
 ##### Examples: malformed sub-types
@@ -181,15 +218,30 @@ A type definition SHALL carry a sub-type, a status, a title and a description. B
 | `nil` | `{"type":"/v1/api/probs/contracts/blacklisted-supplier","title":"Supplier is blacklisted","status":409,"instance":"/v1/contracts/7"}` |
 
 #### Scenario: Nil definition
-- **Given** a nil type definition and a handler with namespace `/v1/api/probs`
+- **Given** `<definition>` and a handler with namespace `/v1/api/probs`
 - **When** a mapper returns the problem built from it with `<fields>`
 - **Then** the response is the safe 500 problem with body `<json>`
 
 ##### Examples:
-| fields | json |
-|--------|------|
-| (none) | `{"title":"Internal Server Error","status":500,"instance":"/v1/contracts/7"}` |
-| `WithDetail("secret")` | `{"title":"Internal Server Error","status":500,"instance":"/v1/contracts/7"}` |
+| definition | fields | json |
+|------------|--------|------|
+| a nil `*Type` | (none) | `{"title":"Internal Server Error","status":500,"instance":"/v1/contracts/7"}` |
+| a nil `*Type` | `WithDetail("secret")` | `{"title":"Internal Server Error","status":500,"instance":"/v1/contracts/7"}` |
+| a zero-value `&Type{}` | (none) | `{"title":"Internal Server Error","status":500,"instance":"/v1/contracts/7"}` |
+| a zero-value `&Type{}` | `WithDetail("secret")` | `{"title":"Internal Server Error","status":500,"instance":"/v1/contracts/7"}` |
+
+#### Scenario: Nil definition accessors
+- **Given** a nil `*Type`
+- **When** `<accessor>` is called
+- **Then** it returns `<value>` without panicking
+
+##### Examples:
+| accessor | value |
+|----------|-------|
+| `Subtype()` | `""` |
+| `Status()` | `0` |
+| `Title()` | `""` |
+| `Description()` | `""` |
 
 #### Scenario: Each problem is a fresh copy
 - **Given** the definition above
@@ -233,7 +285,7 @@ Defining a type with an invalid sub-type, a status outside 400–599 or an empty
 | `x` | 409 | `"   "` | panics naming `DefineType` and the title |
 
 ### Requirement: Definitions are registered with the handler
-`WithTypes` SHALL register type definitions with a handler and SHALL skip nil definitions. Registering two definitions with the same sub-type, or registering any definition without a namespace, SHALL panic at construction with a message naming `WithTypes`.
+`WithTypes` SHALL register type definitions with a handler and SHALL skip nil definitions. Registering two definitions with the same sub-type, registering any definition without a namespace, or registering a definition that `DefineType` would reject (such as a zero-value `Type`), SHALL panic at construction with a message naming `WithTypes`.
 
 #### Scenario: Registration validated
 - **When** a handler is created with `<options>`
@@ -255,6 +307,8 @@ Defining a type with an invalid sub-type, a status outside 400–599 or an empty
 | `WithTypes(A)` | panics naming `WithTypes` and the missing namespace |
 | `WithNamespace("/v1/api/probs"), WithTypes(A, A)` | panics naming `WithTypes` and the sub-type |
 | `WithNamespace("/v1/api/probs"), WithTypes(A), WithTypes(A2)` where `A2` reuses A's sub-type | panics naming `WithTypes` and the sub-type |
+| `WithNamespace("/v1/api/probs"), WithTypes(&Type{})` | panics naming `WithTypes` and the invalid definition |
+| `WithNamespace("/v1/api/probs"), WithTypes(A, &Type{})` | panics naming `WithTypes` and the invalid definition |
 
 ### Requirement: Undocumented types are noted
 When discovery is on, a resolved relative sub-type with no registered definition SHALL leave the response unchanged and SHALL give the hook a note wrapping `ErrUndocumentedType`, so the broken documentation link is visible. Without discovery there SHALL be no such note.

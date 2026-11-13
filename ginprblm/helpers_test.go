@@ -21,6 +21,9 @@ var (
 	ErrLocked         = errors.New("locked")
 )
 
+// OutOfCredit is the type definition of the adapter scenarios.
+var OutOfCredit = prblm.DefineType("out-of-credit", http.StatusForbidden, "Out of credit", "")
+
 // hookRecorder records the errors an OnError hook receives, leaving out the
 // notes about consumer mistakes, which the core reports separately.
 type hookRecorder struct {
@@ -135,7 +138,7 @@ func assertHook(t *testing.T, hook *hookRecorder, want error) {
 // built from opts, and serves handler at GET /x.
 func newEngine(handler gin.HandlerFunc, opts ...prblm.Option) *gin.Engine {
 	engine := gin.New()
-	engine.Use(ginprblm.Middleware(prblm.NewHandler(opts...)))
+	engine.Use(ginprblm.Middleware(opts...))
 	engine.GET("/x", handler)
 
 	return engine
@@ -166,11 +169,11 @@ func assertPanicHook(t *testing.T, hook *hookRecorder, value any) {
 	}
 }
 
-// newRecoveryEngine returns an engine that uses only Recovery with h, and
-// serves handler at GET /x.
-func newRecoveryEngine(handler gin.HandlerFunc, h *prblm.Handler) *gin.Engine {
+// newRecoveryEngine returns an engine that uses only Recovery, built from
+// opts, and serves handler at GET /x.
+func newRecoveryEngine(handler gin.HandlerFunc, opts ...prblm.Option) *gin.Engine {
 	engine := gin.New()
-	engine.Use(ginprblm.Recovery(h))
+	engine.Use(ginprblm.Recovery(opts...))
 	engine.GET("/x", handler)
 
 	return engine

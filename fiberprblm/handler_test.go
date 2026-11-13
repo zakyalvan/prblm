@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
 	"strings"
 	"sync"
@@ -14,6 +15,80 @@ import (
 	"github.com/kartaladev/prblm"
 	"github.com/kartaladev/prblm/fiberprblm"
 )
+
+// fiber-adapter / Scenario: Options configure the error handler.
+func TestErrorHandler_Options(t *testing.T) {
+	t.Parallel()
+
+	mapper := prblm.WithMappers(prblm.Status(ErrVesselNotFound, http.StatusNotFound))
+
+	tests := []struct {
+		name   string
+		opts   []prblm.Option
+		status int
+	}{
+		{name: "none", status: http.StatusInternalServerError},
+		{name: "mapper", opts: []prblm.Option{mapper}, status: http.StatusNotFound},
+		{name: "nil options around a mapper", opts: []prblm.Option{nil, mapper, nil}, status: http.StatusNotFound},
+		{name: "single nil", opts: []prblm.Option{nil}, status: http.StatusInternalServerError},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			app := newApp(tt.opts...)
+			app.Get("/v1/vessels/:id", func(fiber.Ctx) error { return ErrVesselNotFound })
+
+			res := test(t, app, get(t, http.MethodGet, "/v1/vessels/7"))
+
+			if res.status != tt.status {
+				t.Errorf("status = %d, want %d", res.status, tt.status)
+			}
+
+			if ct := res.header.Get("Content-Type"); ct != "application/problem+json" {
+				t.Errorf("Content-Type = %q, want application/problem+json", ct)
+			}
+		})
+	}
+}
+
+// fiber-adapter / Scenario: Invalid options fail at construction.
+func TestErrorHandler_InvalidOptions(t *testing.T) {
+	t.Parallel()
+
+	errorHandler := func(opts ...prblm.Option) { fiberprblm.ErrorHandler(opts...) }
+
+	tests := []struct {
+		name      string
+		construct func(opts ...prblm.Option)
+		opts      []prblm.Option
+		named     string
+	}{
+		{name: "relative namespace", construct: errorHandler, opts: []prblm.Option{prblm.WithNamespace("v1/api/probs")}, named: "WithNamespace"},
+		{name: "types and no namespace", construct: errorHandler, opts: []prblm.Option{prblm.WithTypes(OutOfCredit)}, named: "WithTypes"},
+		{
+			name:      "relative namespace in the discovery middleware",
+			construct: func(opts ...prblm.Option) { fiberprblm.Discovery(opts...) },
+			opts:      []prblm.Option{prblm.WithNamespace("v1/api/probs")},
+			named:     "WithNamespace",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			defer func() {
+				if msg := fmt.Sprint(recover()); !strings.Contains(msg, tt.named) {
+					t.Errorf("panic = %q, want a message naming %s", msg, tt.named)
+				}
+			}()
+
+			tt.construct(tt.opts...)
+		})
+	}
+}
 
 // fiber-adapter / Scenario: Returned errors.
 func TestErrorHandler_Returned(t *testing.T) {
@@ -417,20 +492,6 @@ func TestErrorHandler_Faulty_RespondPanics(t *testing.T) {
 	}
 }
 
-// fiber-adapter / Scenario: Nil handler.
-func TestErrorHandler_Nil(t *testing.T) {
-	t.Parallel()
-
-	defer func() {
-		msg, _ := recover().(string)
-		if !strings.Contains(msg, "problem handler") {
-			t.Errorf("panic = %q, want a message naming the problem handler", msg)
-		}
-	}()
-
-	fiberprblm.ErrorHandler(nil)
-}
-
 // fiber-adapter / Scenario: Concurrent fiber requests.
 func TestErrorHandler_Concurrent(t *testing.T) {
 	t.Parallel()
@@ -476,7 +537,7 @@ func TestErrorHandler_Concurrent(t *testing.T) {
 func TestErrorHandler_NilError(t *testing.T) {
 	t.Parallel()
 
-	handle := fiberprblm.ErrorHandler(prblm.NewHandler())
+	handle := fiberprblm.ErrorHandler()
 
 	app := fiber.New()
 	app.Get("/x", func(c fiber.Ctx) error {
@@ -489,5 +550,57 @@ func TestErrorHandler_NilError(t *testing.T) {
 
 	if res.status != http.StatusAccepted || res.body != "" || strings.HasPrefix(res.header.Get("Content-Type"), "application/problem") {
 		t.Errorf("response %d %q %q, want the handler's 202 untouched", res.status, res.header.Get("Content-Type"), res.body)
+	}
+}
+
+// problem-types / Scenario: Hostile host headers, through fiber: the type
+// comes from the namespace only, never from the request's host.
+func TestErrorHandler_HostHeaders(t *testing.T) {
+	t.Parallel()
+
+	errBlacklisted := errors.New("blacklisted")
+	blacklisted := prblm.WithMappers(prblm.Is(errBlacklisted, func(error) *prblm.Problem {
+		return prblm.New(http.StatusConflict, prblm.WithType("contracts/blacklisted-supplier"))
+	}))
+
+	tests := []struct {
+		name      string
+		namespace string
+		header    http.Header
+		rendered  string
+	}{
+		{
+			name: "host on a path namespace", namespace: "/v1/api/probs",
+			header: http.Header{"Host": {"evil.example"}}, rendered: "/v1/api/probs/contracts/blacklisted-supplier",
+		},
+		{
+			name: "forwarded headers on a path namespace", namespace: "/v1/api/probs",
+			header:   http.Header{"X-Forwarded-Host": {"evil.example"}, "X-Forwarded-Proto": {"http"}},
+			rendered: "/v1/api/probs/contracts/blacklisted-supplier",
+		},
+		{
+			name: "host on a uri namespace", namespace: "https://kartala.id/probs",
+			header: http.Header{"Host": {"evil.example"}}, rendered: "https://kartala.id/probs/contracts/blacklisted-supplier",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			app := newApp(prblm.WithNamespace(tt.namespace), blacklisted)
+			app.Get("/x", func(fiber.Ctx) error { return errBlacklisted })
+
+			req := get(t, http.MethodGet, "/x")
+			maps.Copy(req.Header, tt.header)
+
+			if host := tt.header.Get("Host"); host != "" {
+				req.Host = host
+			}
+
+			if got := problemOf(t, test(t, app, req)).Type; got != tt.rendered {
+				t.Errorf("type = %q, want %q", got, tt.rendered)
+			}
+		})
 	}
 }

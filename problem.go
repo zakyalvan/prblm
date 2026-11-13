@@ -1,12 +1,18 @@
 package prblm
 
 import (
+	"bytes"
 	"cmp"
+	"encoding/json"
+	"encoding/xml"
 	"errors"
 	"fmt"
+	"io"
 	"maps"
 	"net/http"
+	"slices"
 	"strconv"
+	"strings"
 
 	"github.com/kartaladev/prblm/internal/xmlenc"
 )
@@ -77,14 +83,18 @@ type Field func(*Problem)
 // be set directly on the returned problem.
 func New(status int, fields ...Field) *Problem {
 	p := &Problem{Status: status}
+	p.apply(fields)
 
+	return p
+}
+
+// apply applies fields to p in order, skipping nil fields.
+func (p *Problem) apply(fields []Field) {
 	for _, f := range fields {
 		if f != nil {
 			f(p)
 		}
 	}
-
-	return p
 }
 
 // WithType sets the type member, a URI reference that identifies the
@@ -277,4 +287,194 @@ func checkExtensionName(name string) error {
 // (see xmlenc.IsName), so every extension can be encoded as XML.
 func isExtensionName(name string) bool {
 	return len(name) >= 3 && xmlenc.IsName(name)
+}
+
+// Encoding: the JSON and XML forms of a problem.
+
+// MarshalJSON encodes the problem as an application/problem+json document.
+// Members are written in a fixed order (type, title, status, detail,
+// instance) and empty members are omitted. The type is also omitted when it
+// is "about:blank", which is what a client assumes for a missing type.
+// Extension members follow at the top level, sorted by name.
+//
+// Extension values are encoded with the [encoding/json] rules, including
+// struct tags. A value that cannot be encoded (a channel, NaN, a cycle) makes
+// MarshalJSON fail rather than produce a partial document.
+//
+// It has a value receiver so that both Problem and *Problem encode the same
+// way.
+func (p Problem) MarshalJSON() ([]byte, error) {
+	std, err := json.Marshal(problemJSON{
+		Type:     p.wireType(),
+		Title:    p.Title,
+		Status:   p.Status,
+		Detail:   p.Detail,
+		Instance: p.Instance,
+	})
+	if err != nil || len(p.ext) == 0 {
+		return std, err
+	}
+
+	// encoding/json writes map keys sorted, which gives the extension order.
+	ext, err := json.Marshal(p.ext)
+	if err != nil {
+		return nil, fmt.Errorf("prblm: encoding extensions: %w", err)
+	}
+
+	if len(std) == len("{}") {
+		return ext, nil
+	}
+
+	// Join {"title":…} and {"balance":…} into {"title":…,"balance":…}.
+	std = append(std[:len(std)-1], ',')
+
+	return append(std, ext[1:]...), nil
+}
+
+// wireType is the type as written to a document: empty for "about:blank",
+// which is what a client assumes for a missing type.
+func (p Problem) wireType() string {
+	if p.Type == blankType {
+		return ""
+	}
+
+	return p.Type
+}
+
+// UnmarshalJSON decodes an application/problem+json document leniently: a
+// standard member whose value has the wrong type is ignored, and members
+// other than the standard ones are kept as extensions. Extension numbers are
+// decoded as [json.Number], so no precision is lost. Extension names from a
+// decoded document are not validated, since they come from another party.
+// Input that is not a single JSON object is an error.
+func (p *Problem) UnmarshalJSON(data []byte) error {
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.UseNumber()
+
+	var members map[string]any
+	if err := dec.Decode(&members); err != nil {
+		return fmt.Errorf("prblm: decoding problem: %w", err)
+	}
+
+	if members == nil {
+		return errors.New("prblm: decoding problem: document is null")
+	}
+
+	if _, err := dec.Token(); !errors.Is(err, io.EOF) {
+		return errors.New("prblm: decoding problem: data after the document")
+	}
+
+	var decoded Problem
+
+	for name, v := range members {
+		switch name {
+		case memberType:
+			decoded.Type, _ = v.(string)
+		case memberTitle:
+			decoded.Title, _ = v.(string)
+		case memberStatus:
+			decoded.Status = decodeStatus(v)
+		case memberDetail:
+			decoded.Detail, _ = v.(string)
+		case memberInstance:
+			decoded.Instance, _ = v.(string)
+		default:
+			decoded.setExt(name, v)
+		}
+	}
+
+	*p = decoded
+
+	return nil
+}
+
+// MarshalXML encodes the problem as an application/problem+xml document
+// (RFC 9457, Appendix B): a problem element in the urn:ietf:rfc:7807
+// namespace holding the members in the same order and with the same
+// omissions as [Problem.MarshalJSON], then the extensions sorted by name.
+//
+// Extension values have the same structure as in JSON, because they are
+// encoded with the [encoding/json] rules first: objects become child elements
+// sorted by key, array items become <i> elements and null becomes an empty
+// element. A value JSON cannot encode, or an object key or extension name
+// that is not an ASCII letter followed by ASCII letters, digits or
+// underscores, makes MarshalXML fail.
+func (p Problem) MarshalXML(e *xml.Encoder, _ xml.StartElement) error {
+	start := xml.StartElement{Name: xml.Name{Space: xmlNamespace, Local: "problem"}}
+	if err := e.EncodeToken(start); err != nil {
+		return err
+	}
+
+	status := ""
+	if p.Status != 0 {
+		status = strconv.Itoa(p.Status)
+	}
+
+	for _, m := range []struct{ name, value string }{
+		{memberType, p.wireType()},
+		{memberTitle, p.Title},
+		{memberStatus, status},
+		{memberDetail, p.Detail},
+		{memberInstance, p.Instance},
+	} {
+		if m.value == "" {
+			continue
+		}
+
+		if err := xmlenc.Encode(e, m.name, m.value); err != nil {
+			return err
+		}
+	}
+
+	for _, name := range slices.Sorted(maps.Keys(p.ext)) {
+		if err := xmlenc.Encode(e, name, p.ext[name]); err != nil {
+			return fmt.Errorf("prblm: encoding extension %q: %w", name, err)
+		}
+	}
+
+	return e.EncodeToken(start.End())
+}
+
+// UnmarshalXML decodes an application/problem+xml document leniently, like
+// [Problem.UnmarshalJSON]: a standard member that is not plain text, or a
+// status that is not an integer, is ignored, and other members are kept as
+// extensions. XML has no types, so extension values come back as text,
+// lists (elements holding only <i> items) and objects (maps). Text is kept
+// as written, except that the status may be surrounded by whitespace;
+// attributes and comments are ignored. An element other than problem is an
+// error; its namespace is not checked.
+func (p *Problem) UnmarshalXML(d *xml.Decoder, start xml.StartElement) error {
+	if start.Name.Local != "problem" {
+		return fmt.Errorf("prblm: decoding problem: root element is %q, not problem", start.Name.Local)
+	}
+
+	root, err := readNode(d, 1)
+	if err != nil {
+		return err
+	}
+
+	var decoded Problem
+
+	for _, member := range root.children {
+		switch member.name {
+		case memberType:
+			decoded.Type, _ = member.node.text()
+		case memberTitle:
+			decoded.Title, _ = member.node.text()
+		case memberStatus:
+			if text, ok := member.node.text(); ok {
+				decoded.Status = decodeStatus(json.Number(strings.TrimSpace(text)))
+			}
+		case memberDetail:
+			decoded.Detail, _ = member.node.text()
+		case memberInstance:
+			decoded.Instance, _ = member.node.text()
+		default:
+			decoded.setExt(member.name, member.node.value())
+		}
+	}
+
+	*p = decoded
+
+	return nil
 }

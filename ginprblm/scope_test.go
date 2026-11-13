@@ -15,7 +15,7 @@ func newScopedEngine(scope gin.HandlerFunc) *gin.Engine {
 	recordLocked := func(c *gin.Context) { _ = c.Error(ErrLocked) }
 
 	engine := gin.New()
-	engine.Use(ginprblm.Middleware(prblm.NewHandler()))
+	engine.Use(ginprblm.Middleware())
 	engine.Group("/v1/contracts", scope).GET("/:id", recordLocked)
 	engine.Group("/v1/vessels").GET("/:id", recordLocked)
 

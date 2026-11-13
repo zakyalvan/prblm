@@ -321,7 +321,7 @@ func TestMiddleware_RegisteredLate(t *testing.T) {
 		c.Writer.WriteHeaderNow()
 		c.Next()
 	})
-	engine.Use(ginprblm.Middleware(prblm.NewHandler(hook.option())))
+	engine.Use(ginprblm.Middleware(hook.option()))
 	engine.GET("/x", func(c *gin.Context) { _ = c.Error(ErrLocked) })
 
 	rec := fetch(t, engine, "/x")

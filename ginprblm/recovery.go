@@ -10,10 +10,11 @@ import (
 
 // Recovery returns gin middleware that turns a panic in the handlers after
 // it into the core's safe 500 problem: status 500, title "Internal Server
-// Error" and no detail, whatever the panic value, rendered by h like any
-// other problem (enrichers, negotiated format, headers). The value never
-// reaches the client; the [prblm.OnError] hook receives an error that
-// unwraps to a [*prblm.PanicError] holding the value and the stack.
+// Error" and no detail, whatever the panic value, rendered by the problem
+// handler like any other problem (enrichers, negotiated format, headers).
+// The value never reaches the client; the [prblm.OnError] hook receives an
+// error that unwraps to a [*prblm.PanicError] holding the value and the
+// stack.
 //
 // It is opt-in, and it works whether it is registered before or after
 // [Middleware], or without it. It replaces gin.Recovery(); when both are
@@ -30,9 +31,12 @@ import (
 // Recovery never records the panic with c.Error, so [Middleware] never
 // answers it a second time.
 //
-// Recovery panics when h is nil.
-func Recovery(h *prblm.Handler) gin.HandlerFunc {
-	mustExist(h, "Recovery")
+// opts are the options of [prblm.NewHandler], as for [Middleware]. Pass both
+// the same options, so panics and errors share one hook and one set of
+// enrichers; each builds its own handler from them, which costs only a
+// second copy of the configuration.
+func Recovery(opts ...prblm.Option) gin.HandlerFunc {
+	h := prblm.NewHandler(opts...)
 
 	return func(c *gin.Context) {
 		defer recoverPanic(h, c)

@@ -4,14 +4,13 @@
 //
 // # Quick start
 //
-// Install [ErrorHandler] as the application's error handler and return
-// errors from handlers, as fiber handlers usually do:
+// Install [ErrorHandler], built with the same options [prblm.NewHandler]
+// takes, as the application's error handler and return errors from
+// handlers, as fiber handlers usually do:
 //
-//	h := prblm.NewHandler(prblm.WithMappers(
+//	app := fiber.New(fiber.Config{ErrorHandler: fiberprblm.ErrorHandler(prblm.WithMappers(
 //		prblm.Status(ErrVesselNotFound, http.StatusNotFound),
-//	))
-//
-//	app := fiber.New(fiber.Config{ErrorHandler: fiberprblm.ErrorHandler(h)})
+//	))})
 //	app.Get("/v1/vessels/:id", func(c fiber.Ctx) error {
 //		vessel, err := loadVessel(c.Context(), c.Params("id"))
 //		if err != nil {
@@ -20,9 +19,9 @@
 //		return c.JSON(vessel)
 //	})
 //
-// The error is resolved by the handler within the request's context
-// (c.Context()), so mappers, enrichers, the OnError hook and content
-// negotiation behave exactly as with net/http.
+// The error is resolved by a problem handler built from those options,
+// within the request's context (c.Context()), so mappers, enrichers, the
+// OnError hook and content negotiation behave exactly as with net/http.
 //
 // # Fiber errors
 //
@@ -47,11 +46,24 @@
 // error handler; pair it with [ErrorHandler], so the client gets the core's
 // safe 500 problem and the OnError hook gets the panic value and stack:
 //
-//	app := fiber.New(fiber.Config{ErrorHandler: fiberprblm.ErrorHandler(h)})
+//	app := fiber.New(fiber.Config{ErrorHandler: fiberprblm.ErrorHandler(prblm.OnError(logProblem))})
 //	app.Use(fiberprblm.Recovery())
 //
 // With fiber's default error handler instead, the client gets a plain-text
 // 500 "Internal Server Error": the panic value never leaks either way.
+//
+// # Type documentation
+//
+// When the options register problem types with [prblm.WithTypes],
+// [ErrorHandler] serves their documentation for GET and HEAD requests under
+// the namespace path that reach it as fiber's route-not-found error, exactly
+// as the core's [prblm.Handler.Discovery]. A route registered at such a path
+// takes precedence, a handler that returns fiber.ErrNotFound gets a 404
+// problem as usual, and a route for another method gets fiber's 405 as a
+// problem. The error handler never sees a request a route answers; add the
+// opt-in [Discovery] middleware with the same options to have the OnError
+// hook told, with a note wrapping [prblm.ErrShadowedDocumentation], when a
+// route hides documentation.
 //
 // # Safe defaults
 //
@@ -70,6 +82,7 @@
 // on an error whose Unwrap method panics), the response is a bare 500
 // without a body.
 //
-// A nil problem handler is a programming mistake: [ErrorHandler] panics when
-// it is created, so the mistake shows at startup.
+// A configuration mistake, such as an invalid option, is a programming
+// mistake: [ErrorHandler] panics when it is created, so it shows at startup
+// and never inside a request.
 package fiberprblm
