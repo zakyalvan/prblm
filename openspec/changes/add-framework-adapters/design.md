@@ -23,7 +23,7 @@ So an adapter only has to:
 - Dependencies isolated per module.
 
 **Non-Goals:**
-- Changing the core API. The adapters use it as released.
+- Changing the core API, beyond one additive export: `Response.MergeInto` (D2). The adapters use the core as it is.
 - Echo, chi or other routers.
 - Wrapping or replacing gin's or fiber's own logging and recovery middleware.
 
@@ -63,8 +63,11 @@ So an adapter only has to:
 
 ```
 ginprblm/    go.mod  github.com/kartaladev/prblm/ginprblm    requires prblm, gin-gonic/gin
+                     replace github.com/kartaladev/prblm => ../          (until the release)
 fiberprblm/  go.mod  github.com/kartaladev/prblm/fiberprblm  requires prblm, gofiber/fiber/v3
+                     replace github.com/kartaladev/prblm => ../          (until the release)
 internal/paritytest/ go.mod (unpublished)  requires prblm, ginprblm, fiberprblm
+                     replace prblm => ../.., ginprblm => ../../ginprblm, fiberprblm => ../../fiberprblm
 go.work      adds ./ginprblm ./fiberprblm ./internal/paritytest
 ```
 
@@ -73,7 +76,8 @@ go.work      adds ./ginprblm ./fiberprblm ./internal/paritytest
   - Parity tests inside each adapter module. Rejected, because `ginprblm`'s test graph would then contain fiber.
   - A single `adapters` module. Rejected, because it would force gin users to download fiber.
 - **Failure modes:**
-  - **Before the core is tagged, `GOWORK=off` builds fail:** the adapters change starts only after the core's `v0.1.0`, and CI pins that version.
+  - **The core is not tagged until all planned changes are complete:** each module replaces the core with its local path, so `GOWORK=off` builds and CI work without a tag. The release step at the end of `add-mapper-plugins` removes the replaces from the published modules and requires the tagged core.
+  - **A replace left in a published module:** consumers ignore replace directives and would see an unresolvable placeholder version. The release step runs `GOWORK=off` against the real tag and checks that no published `go.mod` has a replace.
   - **A future dependency leaks into a graph:** a CI check runs `go list -m all` in `ginprblm` and asserts there's no `gofiber` or `fasthttp`.
 
 ### D2. Shared adapter flow
@@ -85,12 +89,14 @@ req := prblm.Request{Method, Path (no query), Accept}
 err := last error (+ status hint from the framework)
 resp, ok := h.Respond(requestCtx, req, err)    // hook already called
 if !ok || !canWrite { return }                 // "report but don't write"
-copy resp.Status, resp.Header (merge, Vary added), resp.Body to the framework writer
+resp.MergeInto(framework header); write resp.Status and resp.Body to the framework writer
 ```
 
+- **Header merge:** the copy uses `Response.MergeInto(dst http.Header)`, a new additive core method holding the rules the net/http adapter already uses: response headers replace the framework's, `Vary` keeps the framework's field names and adds `Accept`, and a `Cache-Control` the handler set is kept. The net/http adapter switches to it too, so all three adapters share one implementation. The core's problem-response "Response headers" scenarios already specify these rules.
 - **Failure modes:**
   - **`Respond` panics despite its contract:** the adapter wraps the call in a `recover` that writes a bare 500 with no body when it still can, so a core bug never crashes the server.
-  - **Header merging duplicates `Vary`:** this uses the core's merge semantics, and is covered by the parity test.
+  - **Header merging duplicates `Vary`:** `MergeInto` deduplicates field names, and the parity test covers it.
+  - **A nil destination or an empty response header:** `MergeInto` handles both without panicking (its own Murphy rows).
 
 ### D3. gin deferred-header writer
 
@@ -222,7 +228,7 @@ The test-only module `internal/paritytest` builds one `prblm.Handler` and three 
 
 ## Migration Plan
 
-New modules, so there's nothing to migrate. Tag `ginprblm/v0.1.0` and `fiberprblm/v0.1.0` after slice 7, against the released core `v0.1.0`.
+New modules, so there's nothing to migrate. `ginprblm/v0.1.0` and `fiberprblm/v0.1.0` are tagged in the release step at the end of `add-mapper-plugins`, right after the core's `v0.1.0`, once their replaces are removed.
 
 ## Open Questions
 

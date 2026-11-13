@@ -210,7 +210,10 @@ if errors.Is(err, prblm.ErrNotProblem) {
 
 `Handler.Respond` turns a request description and an error into a complete response (status,
 headers, body) without writing it. Framework adapters copy that response to their own writer, so
-every framework produces the same output. Adapters for gin and fiber are planned as separate
+every framework produces the same output. `Response.MergeInto` merges the problem headers into
+the headers already set on the framework's response by the same rules as the net/http adapter:
+problem headers replace existing ones, `Vary` keeps the existing field names and adds `Accept`,
+and a `Cache-Control` the handler set is kept. Adapters for gin and fiber are planned as separate
 modules.
 
 ## Defaults

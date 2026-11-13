@@ -2,9 +2,13 @@
 
 ## 1. Scaffolding for slice 1
 
-- [ ] 1.1 Create `ginprblm/go.mod` (`github.com/kartaladev/prblm/ginprblm`, `go 1.27`, requiring the released core `v0.1.0` and gin) and add `./ginprblm` to `go.work`; verify `go build ./...` succeeds in the module both with the workspace and with `GOWORK=off`
-- [ ] 1.2 Extend CI to a per-module matrix (root, `ginprblm`) running `go vet`, `golangci-lint run`, `go test -race ./...` and `GOWORK=off go test ./...`; verify the pipeline passes
-- [ ] 1.3 Add a CI check that `go list -m all` in the root and `ginprblm` modules contains no `gofiber` or `fasthttp`; verify it fails when fiber is temporarily required
+- [x] 1.1 Create `ginprblm/go.mod` (`github.com/kartaladev/prblm/ginprblm`, `go 1.27`, requiring gin and the core through `replace github.com/kartaladev/prblm => ../` until the release) and add `./ginprblm` to `go.work`; verify `go build ./...` succeeds in the module both with the workspace and with `GOWORK=off`
+- [x] 1.2 Extend CI to a per-module matrix (root, `ginprblm`) running `go vet`, `golangci-lint run`, `go test -race ./...` and `GOWORK=off go test ./...`; verify the pipeline passes
+- [x] 1.3 Add a CI check that `go list -m all` in the root and `ginprblm` modules contains no `gofiber` or `fasthttp`; verify it fails when fiber is temporarily required
+- [x] 1.4 Export `Response.MergeInto(dst http.Header)` in the core (design D2; core problem-response / Scenario: Headers on the response); verify `go test -race -run 'TestResponse_MergeInto|TestRespond_Headers|TestWrap'` passes in the root module
+  - RED: rows for a replaced header, `Vary` merged without duplicates, a handler `Cache-Control` kept, and Murphy rows for a nil destination and an empty response header; fails because `MergeInto` does not exist
+  - GREEN: move `mergeHeader` onto `Response` (Move Function) and have the net/http adapter call it
+  - REFACTOR: /simplify; add the method to the README "Other frameworks" section and the CHANGELOG
 
 ## 2. Slice: gin turns a recorded sentinel error into a JSON problem
 
@@ -85,7 +89,7 @@
 
 ## 6. Slice: fiber ErrorHandler
 
-- [ ] 6.1 Create `fiberprblm/go.mod` (`github.com/kartaladev/prblm/fiberprblm`, `go 1.27`, requiring the core `v0.1.0` and the pinned fiber v3 minor), add it to `go.work` and the CI matrix; verify `go build ./...` with and without `GOWORK`
+- [ ] 6.1 Create `fiberprblm/go.mod` (`github.com/kartaladev/prblm/fiberprblm`, `go 1.27`, requiring the pinned fiber v3 minor and the core through `replace github.com/kartaladev/prblm => ../` until the release), add it to `go.work` and the CI matrix; verify `go build ./...` with and without `GOWORK`
 - [ ] 6.2 Render returned errors (fiber-adapter / Scenario: Returned errors, Scenario: Unmapped error text never leaks); verify `go test -race -run TestErrorHandler_Returned` passes using `app.Test`
   - RED: four returned-error rows and both leak rows; fails because `ErrorHandler` does not exist
   - GREEN: `ErrorHandler(h)` per design D6 (request facts, `Respond` on `c.Context()`, write status/headers/body)
@@ -120,7 +124,7 @@
 
 ## 8. Slice: cross-adapter parity and documentation
 
-- [ ] 8.1 Create the unpublished test module `internal/paritytest` (requires core, `ginprblm`, `fiberprblm`) and add it to `go.work`; verify `go build ./...` succeeds in the workspace
+- [ ] 8.1 Create the unpublished test module `internal/paritytest` (requires core, `ginprblm`, `fiberprblm`, replaced with `../..`, `../../ginprblm` and `../../fiberprblm`; it keeps these replaces after the release) and add it to `go.work`; verify `go build ./...` succeeds in the workspace
 - [ ] 8.2 Compare outputs across net/http, gin and fiber (gin-adapter / Scenario: Same output as net/http; fiber-adapter / Scenario: Same output as net/http); verify `go test -race ./internal/paritytest` passes
   - RED: one table test, one row per parity Examples row, three servers sharing one `prblm.Handler`, comparing status, `Content-Type`, `Vary` and body bytes
   - GREEN: fix adapter header or body differences until identical (never special-case the test)
@@ -130,4 +134,4 @@
 
 ## Workflow follow-up
 
-- Archive the change after review and once `ginprblm/v0.1.0` and `fiberprblm/v0.1.0` are tagged.
+- Archive the change after review. `ginprblm/v0.1.0` and `fiberprblm/v0.1.0` are tagged in the release step (group 7) of `add-mapper-plugins`.

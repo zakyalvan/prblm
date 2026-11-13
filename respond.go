@@ -50,6 +50,35 @@ type Response struct {
 	Status int
 }
 
+// MergeInto merges the response headers into dst, the headers a handler or
+// a framework already set on the response, so that every adapter applies the
+// same rules: response headers replace those in dst, except that Vary keeps
+// the field names already in dst (adding Accept without duplicates), and a
+// Cache-Control already in dst is kept, because the handler already chose how
+// its response may be cached.
+//
+// The values are copied, so dst never shares storage with r. A nil dst has
+// nothing to merge into, and a nil r.Header has nothing to merge: both leave
+// dst unchanged.
+func (r Response) MergeInto(dst http.Header) {
+	if dst == nil {
+		return
+	}
+
+	for name, values := range r.Header {
+		switch name {
+		case "Vary":
+			addVary(dst, values...)
+		case "Cache-Control":
+			if len(dst.Values(name)) == 0 {
+				dst[name] = slices.Clone(values)
+			}
+		default:
+			dst[name] = slices.Clone(values)
+		}
+	}
+}
+
 // Respond turns err into a complete problem response without writing it, so
 // any framework adapter can deliver the same output. It reports false when
 // there is nothing to write, which is only the case for a nil err. A request

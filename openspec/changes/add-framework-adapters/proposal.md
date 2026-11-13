@@ -48,7 +48,7 @@ None. The core capabilities (`error-mapping`, `problem-response`, `stdlib-adapte
 5. fiber `Scope` and `Recovery`
 6. cross-adapter parity and documentation
 
-**Depends on:** `add-problem-details-core` being implemented and released (`v0.1.0`), because the adapter modules must build with `GOWORK=off` against a published core version.
+**Depends on:** `add-problem-details-core` (implemented and archived). Nothing is tagged until all planned changes are complete. Until then each adapter module points at the core in this repository with `replace github.com/kartaladev/prblm => ../`, so `GOWORK=off` builds work without a tag. The release (the core's `v0.1.0` first, then the adapter tags) is the final step of `add-mapper-plugins`, which is implemented after this change.
 
 Deliberately left for later: echo, chi and other routers (chi and `http.ServeMux` users are already served by the net/http adapter), and the mapper plugins (`add-mapper-plugins`).
 
@@ -57,6 +57,7 @@ Deliberately left for later: echo, chi and other routers (chi and `http.ServeMux
 - New modules `ginprblm/` and `fiberprblm/`, each with its own `go.mod` requiring `github.com/kartaladev/prblm`. `go.work` gains both modules. The release tags are `ginprblm/vX.Y.Z` and `fiberprblm/vX.Y.Z`.
 - Third-party dependencies stay confined: gin only in `ginprblm`, and fiber and fasthttp only in `fiberprblm`. Neither the root module's graph nor `ginprblm`'s graph contains gofiber or fasthttp.
 - **Public API (compatibility decision):**
+  - one additive core export, `prblm.Response.MergeInto`, so every adapter merges headers by the core's rules (design D2)
   - `ginprblm.Middleware`, `ginprblm.Scope`, `ginprblm.Recovery`
   - `fiberprblm.ErrorHandler`, `fiberprblm.Scope`, `fiberprblm.Recovery`
 
