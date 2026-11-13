@@ -1,10 +1,13 @@
 package prblm
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
 	"net/http"
+	"runtime/debug"
+	"slices"
 )
 
 // ErrInvalidStatus is wrapped by the note the [OnError] hook receives when a
@@ -59,6 +62,9 @@ func NewHandler(opts ...Option) *Handler {
 	return h
 }
 
+// Resolving errors: the steps that turn an error into a problem, in the order
+// they run.
+
 // Resolve turns err into a problem, or returns nil for a nil err.
 //
 // The steps run in this order, and the first one that recognizes err wins:
@@ -99,6 +105,45 @@ func (h *Handler) Resolve(ctx context.Context, err error) *Problem {
 	return resolved
 }
 
+// match runs the resolution steps in order and returns the problem of the
+// first one that recognizes err, or nil when none does.
+func (h *Handler) match(ctx context.Context, err error) *Problem {
+	if p := safeCall(ctx, h, func() *Problem { return selfDescribed(err) }); p != nil {
+		return p
+	}
+
+	if p := h.firstMatch(ctx, scopedMappers(ctx), err); p != nil {
+		return p
+	}
+
+	if p := h.firstMatch(ctx, h.mappers, err); p != nil {
+		return p
+	}
+
+	if p := h.firstMatch(ctx, h.builtins, err); p != nil {
+		return p
+	}
+
+	return hinted(err)
+}
+
+// firstMatch returns the problem from the first mapper that recognizes err,
+// or nil when none does. Nil mappers are skipped, wherever they were
+// registered, and a mapper that panics counts as no match.
+func (h *Handler) firstMatch(ctx context.Context, mappers []Mapper, err error) *Problem {
+	for _, m := range mappers {
+		if isNilMapper(m) {
+			continue
+		}
+
+		if p := safeCall(ctx, h, func() *Problem { return m.MapError(ctx, err) }); p != nil {
+			return p
+		}
+	}
+
+	return nil
+}
+
 // complete applies the steps every problem goes through after it is
 // matched: status normalization, title finalization, the enrichers and type
 // resolution. Types are resolved after the enrichers, so a type an enricher
@@ -128,18 +173,6 @@ func (h *Handler) normalize(ctx context.Context, p *Problem) {
 	}
 }
 
-// report calls the OnError hook, if any. A hook that panics is ignored:
-// there is nowhere left to report it, and the response must still go out.
-func (h *Handler) report(ctx context.Context, err error, p *Problem) {
-	if h.onError == nil {
-		return
-	}
-
-	defer func() { _ = recover() }()
-
-	h.onError(ctx, err, p)
-}
-
 // enrich runs the default instance enricher and then the consumer's
 // enrichers, in order, on p.
 func (h *Handler) enrich(ctx context.Context, p *Problem) {
@@ -156,6 +189,413 @@ func (h *Handler) enrich(ctx context.Context, p *Problem) {
 	}
 }
 
+// resolveType turns the relative sub-type of p into a type under the
+// handler's namespace. An empty type, about:blank, an absolute URI such as a
+// urn: and an absolute path are kept. Any other relative type is a mistake:
+// it becomes about:blank, and is reported to the hook. Without a namespace, every type is kept.
+//
+// Only the configured namespace is used, never the request's Host header,
+// which a client controls.
+func (h *Handler) resolveType(ctx context.Context, p *Problem) {
+	if h.namespace == "" || isKeptType(p.Type) {
+		return
+	}
+
+	if isSubtype(p.Type) {
+		p.Type = h.namespace + "/" + p.Type
+
+		return
+	}
+
+	given := p.Type
+	p.Type = ""
+
+	h.report(ctx, fmt.Errorf("%w: %q", ErrInvalidType, given), p)
+}
+
+// report calls the OnError hook, if any. A hook that panics is ignored:
+// there is nowhere left to report it, and the response must still go out.
+func (h *Handler) report(ctx context.Context, err error, p *Problem) {
+	if h.onError == nil {
+		return
+	}
+
+	defer func() { _ = recover() }()
+
+	h.onError(ctx, err, p)
+}
+
+// Responding: turning a resolved problem into a response.
+
+// Respond turns err into a complete problem response without writing it, so
+// any framework adapter can deliver the same output. It reports false when
+// there is nothing to write, which is only the case for a nil err. A request
+// whose context was canceled is answered like any other: a client that is
+// still connected gets the problem, and the server drops a write to one that
+// went away.
+//
+// The format follows req.Accept: application/problem+xml for a client that
+// prefers XML (application/problem+xml, application/xml or text/xml), and
+// application/problem+json otherwise, including when the header accepts
+// neither or is malformed, so a client always gets the status and a document
+// rather than a 406.
+//
+// The body is encoded in full before anything is returned, so a problem that
+// cannot be encoded (for example an extension holding a channel or an
+// infinite number, or a name XML cannot carry) is never sent in part: the
+// response becomes the constant minimal JSON problem
+// {"title":"Internal Server Error","status":500}, whatever the format, and
+// the failure goes to the [OnError] hook.
+func (h *Handler) Respond(ctx context.Context, req Request, err error) (Response, bool) {
+	if err == nil {
+		return Response{}, false
+	}
+
+	ctx = withRequest(ctx, req)
+
+	return h.respond(ctx, req, err, h.Resolve(ctx, err)), true
+}
+
+// respondPanic renders a recovered panic as the response for req. A panic is
+// never mapped like a returned error: whatever its value, the problem is the
+// safe 500 fallback, completed by the enrichers and rendered like any other.
+// The OnError hook receives pe.
+func (h *Handler) respondPanic(ctx context.Context, req Request, pe *PanicError) Response {
+	ctx = withRequest(ctx, req)
+
+	p := fallbackProblem()
+	h.complete(ctx, p)
+
+	return h.respond(ctx, req, pe, p)
+}
+
+// respond renders p, the problem resolved for err, as the response for req:
+// it negotiates the format, encodes p (falling back to the minimal problem)
+// and reports err to the OnError hook with the problem being sent.
+func (h *Handler) respond(ctx context.Context, req Request, err error, p *Problem) Response {
+	res, sent := h.render(ctx, req, p)
+	h.report(ctx, err, sent)
+
+	return res
+}
+
+// render renders p as the response for req: it negotiates the format and
+// encodes p, falling back to the minimal problem when that fails. It
+// returns the response and the problem it carries.
+func (h *Handler) render(ctx context.Context, req Request, p *Problem) (Response, *Problem) {
+	f := negotiateFormat(req.Accept)
+
+	body, ok := h.encode(ctx, f, p)
+	if !ok {
+		// Nothing of p is sent, not even its headers: the minimal problem is
+		// a constant JSON document, so it cannot fail too.
+		f, body = &jsonFormat, []byte(fallbackBody)
+		p = fallbackProblem()
+		p.finalize()
+	}
+
+	return newResponse(p.Status, p.Header, f.mediaType, body), p
+}
+
+// encode encodes p in format f and reports whether it succeeded. A failure,
+// including a panic in the encoder of an extension value, is reported to the
+// OnError hook, so the response can fall back to the minimal problem without
+// losing the reason.
+func (h *Handler) encode(ctx context.Context, f *format, p *Problem) ([]byte, bool) {
+	var (
+		body []byte
+		err  error
+	)
+
+	// safeCall returns false when the encoder panicked, after reporting it.
+	if completed := safeCall(ctx, h, func() bool { body, err = f.encode(p); return true }); !completed {
+		return nil, false
+	}
+
+	if err != nil {
+		h.report(ctx, fmt.Errorf("%w: %w", ErrEncoding, err), p)
+
+		return nil, false
+	}
+
+	return body, true
+}
+
+// The net/http adapter.
+
+// Wrap turns a handler function that returns an error into an [http.Handler].
+// A non-nil error is written as a problem response; a nil error leaves the
+// response as fn wrote it.
+//
+// Wrap watches what fn writes. When fn has already started the response (it
+// wrote a status other than 1xx, wrote body bytes, flushed or hijacked the
+// connection), the error is still reported to the [OnError] hook but nothing
+// more is written: the client has the start of another response, and
+// appending a problem would corrupt it. Headers fn set without writing are
+// kept, except those the problem response controls.
+//
+// Wrap panics when h or fn is nil, so the mistake shows at startup rather
+// than on the first request.
+func (h *Handler) Wrap(fn func(http.ResponseWriter, *http.Request) error) http.Handler {
+	h.mustExist("Wrap")
+
+	if fn == nil {
+		panic("prblm: Handler.Wrap called with a nil handler function")
+	}
+
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		tw := track(w)
+		h.answer(tw, r, fn(tw, r))
+	})
+}
+
+// Write writes err as a problem response to w, for handlers that keep the
+// standard signature. A nil err writes nothing.
+//
+// Write cannot see what was written to w before it was called, so it assumes
+// nothing was, unless w comes from [Handler.Wrap]: then a response that has
+// already started is left alone, and err only reaches the [OnError] hook.
+//
+// Write panics when h is nil.
+func (h *Handler) Write(w http.ResponseWriter, r *http.Request, err error) {
+	h.mustExist("Write")
+	h.answer(track(w), r, err)
+}
+
+// answer writes the problem response for err to tw, unless tw has already
+// started its response; the error reaches the OnError hook even then. The
+// response goes through tw, which marks it started, so an error is never
+// answered twice.
+func (h *Handler) answer(tw *trackingWriter, r *http.Request, err error) {
+	res, ok := h.Respond(r.Context(), requestOf(r), err)
+	if !ok || tw.started {
+		return
+	}
+
+	tw.send(res)
+}
+
+// Recover returns middleware that turns a panic in next into a 500 problem
+// response. It is opt-in: [Handler.Wrap] alone lets panics reach net/http,
+// so existing recovery middleware keeps working.
+//
+// The problem is the safe fallback, whatever the panic value: status 500,
+// title "Internal Server Error" and no detail, rendered like any other
+// problem (enrichers, negotiated format, headers). The value never reaches
+// the client; the [OnError] hook receives it as a [*PanicError].
+//
+// A panic with [http.ErrAbortHandler] itself is passed on unchanged, so
+// net/http aborts the response as designed; it is not reported. When the
+// handler has already started the response, or the panic shows the client
+// connection is broken (EPIPE, ECONNRESET), nothing is written and the hook
+// receives the panic with a nil problem.
+//
+// Enrichers and the hook see the context of the request Recover received,
+// not values that middleware inside it added before the panic: install
+// Recover inside middleware whose context values they need.
+//
+// Recover installs the same tracking writer as [Handler.Wrap], and Wrap
+// reuses it, so Recover(h.Wrap(fn)) keeps one record of what was written.
+//
+// Recover panics when h or next is nil.
+func (h *Handler) Recover(next http.Handler) http.Handler {
+	h.mustExist("Recover")
+
+	if next == nil {
+		panic("prblm: Handler.Recover called with a nil next handler")
+	}
+
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		tw := track(w)
+
+		defer h.recoverPanic(tw, r)
+
+		next.ServeHTTP(tw, r)
+	})
+}
+
+// recoverPanic is deferred by Recover: it recovers a panic in the handler
+// and answers it on tw.
+func (h *Handler) recoverPanic(tw *trackingWriter, r *http.Request) {
+	v := recover()
+	if v == nil {
+		return
+	}
+
+	// net/http aborts the response on this exact value, by design.
+	//nolint:errorlint // only the sentinel itself aborts, not an error wrapping it.
+	if err, ok := v.(error); ok && err == http.ErrAbortHandler {
+		panic(v)
+	}
+
+	// The panicking frames are still on the stack while a deferred function
+	// runs, so the stack shows where the panic happened.
+	pe := &PanicError{Value: v, Stack: debug.Stack()}
+
+	// A started response cannot take a problem any more, and a broken
+	// connection cannot take anything: the panic only goes to the hook.
+	req := requestOf(r)
+	ctx := withRequest(r.Context(), req)
+
+	if tw.started || isBrokenConnection(pe) {
+		h.report(ctx, pe, nil)
+
+		return
+	}
+
+	// A panic while answering is a bug in the library or in the writer; the
+	// constant problem cannot fail the same way.
+	defer h.writeFallback(ctx, tw)
+
+	tw.send(h.respondPanic(ctx, req, pe))
+}
+
+// writeFallback is deferred while a panic is answered: when answering panics
+// too, it writes the constant minimal problem if nothing was written yet. It
+// never panics itself.
+func (h *Handler) writeFallback(ctx context.Context, tw *trackingWriter) {
+	v := recover()
+	if v == nil {
+		return
+	}
+
+	// report already contains a panicking hook; this guards the write,
+	// should the writer itself panic again.
+	defer func() { _ = recover() }()
+
+	h.report(ctx, &PanicError{Value: v, Stack: debug.Stack()}, nil)
+
+	if tw.started {
+		return
+	}
+
+	tw.send(newResponse(http.StatusInternalServerError, nil, mediaTypeJSON, []byte(fallbackBody)))
+}
+
+// mustExist panics when h is nil, naming the method, so that a missing
+// NewHandler call fails where the mistake is rather than inside a request.
+func (h *Handler) mustExist(method string) {
+	if h == nil {
+		panic("prblm: Handler." + method + " called on a nil problem handler; create it with NewHandler")
+	}
+}
+
+// Problem types: checking the registered definitions and serving their
+// documentation.
+
+// checkTypes checks the definitions passed to WithTypes, once all options
+// are applied, and panics on a missing namespace or a duplicate sub-type.
+func (h *Handler) checkTypes() {
+	if len(h.definitions) == 0 {
+		return
+	}
+
+	if h.namespace == "" {
+		panic("prblm: WithTypes: types need WithNamespace")
+	}
+
+	seen := make(map[string]struct{}, len(h.definitions))
+
+	for _, t := range h.definitions {
+		if _, ok := seen[t.subtype]; ok {
+			panic(fmt.Sprintf("prblm: WithTypes: duplicate sub-type %q", t.subtype))
+		}
+
+		seen[t.subtype] = struct{}{}
+	}
+}
+
+// newDiscovery renders the documentation of the handler's types, or returns
+// nil when discovery is off.
+func (h *Handler) newDiscovery() *discovery {
+	if len(h.definitions) == 0 || h.isDiscoveryDisabled {
+		return nil
+	}
+
+	d := &discovery{
+		docs: make(map[string]pages, len(h.definitions)),
+		path: namespacePath(h.namespace),
+	}
+
+	sorted := slices.SortedFunc(slices.Values(h.definitions), func(a, b *Type) int {
+		return cmp.Compare(a.subtype, b.subtype)
+	})
+
+	index := indexDoc{Types: make([]indexEntry, 0, len(sorted))}
+
+	for _, t := range sorted {
+		doc := typeDoc{
+			Type:        h.namespace + "/" + t.subtype,
+			Subtype:     t.subtype,
+			Status:      t.status,
+			Title:       t.title,
+			Description: t.description,
+		}
+		d.docs[t.subtype] = pages{html: htmlPage(docTemplate, doc), json: jsonPage(doc)}
+		index.Types = append(index.Types, indexEntry{Type: doc.Type, Subtype: doc.Subtype, Status: doc.Status, Title: doc.Title})
+	}
+
+	d.index = pages{html: htmlPage(indexTemplate, index), json: jsonPage(index)}
+
+	return d
+}
+
+// DiscoveryPath returns the path the documentation of the registered types
+// is served under, which is the path of the namespace, or "" when discovery
+// is off (no types registered, or [WithoutDiscovery]). Mount
+// [Handler.Discovery] there:
+//
+//	if path := h.DiscoveryPath(); path != "" {
+//		mux.Handle("GET "+path+"/", h.Discovery())
+//	}
+func (h *Handler) DiscoveryPath() string {
+	if h.discovery == nil {
+		return ""
+	}
+
+	return h.discovery.path
+}
+
+// Discovery returns an [http.Handler] that serves the documentation of the
+// registered types at their type URLs, so a client can dereference a
+// problem's type, as RFC 9457 recommends. It is never nil: with discovery
+// off, it answers every request with a 404 problem.
+func (h *Handler) Discovery() http.Handler {
+	return http.HandlerFunc(h.serveDiscovery)
+}
+
+// serveDiscovery serves one discovery request.
+func (h *Handler) serveDiscovery(w http.ResponseWriter, r *http.Request) {
+	d := h.discovery
+	if d == nil {
+		h.writeProblem(w, r, New(http.StatusNotFound))
+
+		return
+	}
+
+	doc, ok := d.lookup(r.URL.Path)
+	if !ok {
+		h.writeProblem(w, r, New(http.StatusNotFound))
+
+		return
+	}
+
+	writeDiscovery(w, r, doc.negotiate(requestOf(r).Accept).response())
+}
+
+// writeProblem answers a discovery request with p, completed and rendered
+// like any other problem, but without calling the OnError hook: no
+// application error occurred.
+func (h *Handler) writeProblem(w http.ResponseWriter, r *http.Request, p *Problem) {
+	req := requestOf(r)
+	ctx := withRequest(r.Context(), req)
+
+	h.complete(ctx, p)
+	res, _ := h.render(ctx, req, p)
+
+	writeDiscovery(w, r, res)
+}
+
 // defaultInstance sets the instance of p to the path of the request being
 // answered, when p has no instance. The path excludes the query string, so
 // tokens in it cannot leak.
@@ -167,28 +607,6 @@ func defaultInstance(ctx context.Context, p *Problem) {
 	if req, ok := RequestFrom(ctx); ok {
 		p.Instance = req.Path
 	}
-}
-
-// match runs the resolution steps in order and returns the problem of the
-// first one that recognizes err, or nil when none does.
-func (h *Handler) match(ctx context.Context, err error) *Problem {
-	if p := safeCall(ctx, h, func() *Problem { return selfDescribed(err) }); p != nil {
-		return p
-	}
-
-	if p := h.firstMatch(ctx, scopedMappers(ctx), err); p != nil {
-		return p
-	}
-
-	if p := h.firstMatch(ctx, h.mappers, err); p != nil {
-		return p
-	}
-
-	if p := h.firstMatch(ctx, h.builtins, err); p != nil {
-		return p
-	}
-
-	return hinted(err)
 }
 
 // isErrorStatus reports whether status is a client or server error status.
@@ -217,23 +635,6 @@ func hinted(err error) *Problem {
 	}
 
 	return &Problem{Status: hint.status}
-}
-
-// firstMatch returns the problem from the first mapper that recognizes err,
-// or nil when none does. Nil mappers are skipped, wherever they were
-// registered, and a mapper that panics counts as no match.
-func (h *Handler) firstMatch(ctx context.Context, mappers []Mapper, err error) *Problem {
-	for _, m := range mappers {
-		if isNilMapper(m) {
-			continue
-		}
-
-		if p := safeCall(ctx, h, func() *Problem { return m.MapError(ctx, err) }); p != nil {
-			return p
-		}
-	}
-
-	return nil
 }
 
 // isNilMapper reports whether m is nil or a nil [MapperFunc]. A nil

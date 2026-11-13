@@ -100,25 +100,3 @@ func WithTypes(types ...*Type) Option {
 		}
 	}
 }
-
-// checkTypes checks the definitions passed to WithTypes, once all options
-// are applied, and panics on a missing namespace or a duplicate sub-type.
-func (h *Handler) checkTypes() {
-	if len(h.definitions) == 0 {
-		return
-	}
-
-	if h.namespace == "" {
-		panic("prblm: WithTypes: types need WithNamespace")
-	}
-
-	seen := make(map[string]struct{}, len(h.definitions))
-
-	for _, t := range h.definitions {
-		if _, ok := seen[t.subtype]; ok {
-			panic(fmt.Sprintf("prblm: WithTypes: duplicate sub-type %q", t.subtype))
-		}
-
-		seen[t.subtype] = struct{}{}
-	}
-}

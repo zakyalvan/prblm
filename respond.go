@@ -1,9 +1,7 @@
 package prblm
 
 import (
-	"context"
 	"errors"
-	"fmt"
 	"iter"
 	"net/http"
 	"slices"
@@ -79,76 +77,6 @@ func (r Response) MergeInto(dst http.Header) {
 	}
 }
 
-// Respond turns err into a complete problem response without writing it, so
-// any framework adapter can deliver the same output. It reports false when
-// there is nothing to write, which is only the case for a nil err. A request
-// whose context was canceled is answered like any other: a client that is
-// still connected gets the problem, and the server drops a write to one that
-// went away.
-//
-// The format follows req.Accept: application/problem+xml for a client that
-// prefers XML (application/problem+xml, application/xml or text/xml), and
-// application/problem+json otherwise, including when the header accepts
-// neither or is malformed, so a client always gets the status and a document
-// rather than a 406.
-//
-// The body is encoded in full before anything is returned, so a problem that
-// cannot be encoded (for example an extension holding a channel or an
-// infinite number, or a name XML cannot carry) is never sent in part: the
-// response becomes the constant minimal JSON problem
-// {"title":"Internal Server Error","status":500}, whatever the format, and
-// the failure goes to the [OnError] hook.
-func (h *Handler) Respond(ctx context.Context, req Request, err error) (Response, bool) {
-	if err == nil {
-		return Response{}, false
-	}
-
-	ctx = withRequest(ctx, req)
-
-	return h.respond(ctx, req, err, h.Resolve(ctx, err)), true
-}
-
-// respondPanic renders a recovered panic as the response for req. A panic is
-// never mapped like a returned error: whatever its value, the problem is the
-// safe 500 fallback, completed by the enrichers and rendered like any other.
-// The OnError hook receives pe.
-func (h *Handler) respondPanic(ctx context.Context, req Request, pe *PanicError) Response {
-	ctx = withRequest(ctx, req)
-
-	p := fallbackProblem()
-	h.complete(ctx, p)
-
-	return h.respond(ctx, req, pe, p)
-}
-
-// respond renders p, the problem resolved for err, as the response for req:
-// it negotiates the format, encodes p (falling back to the minimal problem)
-// and reports err to the OnError hook with the problem being sent.
-func (h *Handler) respond(ctx context.Context, req Request, err error, p *Problem) Response {
-	res, sent := h.render(ctx, req, p)
-	h.report(ctx, err, sent)
-
-	return res
-}
-
-// render renders p as the response for req: it negotiates the format and
-// encodes p, falling back to the minimal problem when that fails. It
-// returns the response and the problem it carries.
-func (h *Handler) render(ctx context.Context, req Request, p *Problem) (Response, *Problem) {
-	f := negotiateFormat(req.Accept)
-
-	body, ok := h.encode(ctx, f, p)
-	if !ok {
-		// Nothing of p is sent, not even its headers: the minimal problem is
-		// a constant JSON document, so it cannot fail too.
-		f, body = &jsonFormat, []byte(fallbackBody)
-		p = fallbackProblem()
-		p.finalize()
-	}
-
-	return newResponse(p.Status, p.Header, f.mediaType, body), p
-}
-
 // format is a problem document format the handler can answer with.
 type format struct {
 	// encode encodes a problem as a complete document.
@@ -202,30 +130,6 @@ func negotiateFormat(accept string) *format {
 	}
 
 	return &jsonFormat
-}
-
-// encode encodes p in format f and reports whether it succeeded. A failure,
-// including a panic in the encoder of an extension value, is reported to the
-// OnError hook, so the response can fall back to the minimal problem without
-// losing the reason.
-func (h *Handler) encode(ctx context.Context, f *format, p *Problem) ([]byte, bool) {
-	var (
-		body []byte
-		err  error
-	)
-
-	// safeCall returns false when the encoder panicked, after reporting it.
-	if completed := safeCall(ctx, h, func() bool { body, err = f.encode(p); return true }); !completed {
-		return nil, false
-	}
-
-	if err != nil {
-		h.report(ctx, fmt.Errorf("%w: %w", ErrEncoding, err), p)
-
-		return nil, false
-	}
-
-	return body, true
 }
 
 // newResponse builds a problem response. It takes ownership of header,

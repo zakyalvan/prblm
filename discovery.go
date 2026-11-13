@@ -2,13 +2,11 @@ package prblm
 
 import (
 	"bytes"
-	"cmp"
 	"encoding/json"
 	"fmt"
 	"html/template"
 	"net/http"
 	"net/url"
-	"slices"
 	"strconv"
 	"strings"
 
@@ -166,41 +164,6 @@ type typeDoc struct {
 	Description string `json:"description"`
 }
 
-// newDiscovery renders the documentation of the handler's types, or returns
-// nil when discovery is off.
-func (h *Handler) newDiscovery() *discovery {
-	if len(h.definitions) == 0 || h.isDiscoveryDisabled {
-		return nil
-	}
-
-	d := &discovery{
-		docs: make(map[string]pages, len(h.definitions)),
-		path: namespacePath(h.namespace),
-	}
-
-	sorted := slices.SortedFunc(slices.Values(h.definitions), func(a, b *Type) int {
-		return cmp.Compare(a.subtype, b.subtype)
-	})
-
-	index := indexDoc{Types: make([]indexEntry, 0, len(sorted))}
-
-	for _, t := range sorted {
-		doc := typeDoc{
-			Type:        h.namespace + "/" + t.subtype,
-			Subtype:     t.subtype,
-			Status:      t.status,
-			Title:       t.title,
-			Description: t.description,
-		}
-		d.docs[t.subtype] = pages{html: htmlPage(docTemplate, doc), json: jsonPage(doc)}
-		index.Types = append(index.Types, indexEntry{Type: doc.Type, Subtype: doc.Subtype, Status: doc.Status, Title: doc.Title})
-	}
-
-	d.index = pages{html: htmlPage(indexTemplate, index), json: jsonPage(index)}
-
-	return d
-}
-
 // lookup returns the pages served at path: the index at the namespace path,
 // with or without a trailing slash, or the documentation of the type whose
 // sub-type is the rest of the path, matched exactly.
@@ -251,62 +214,6 @@ func htmlPage(tmpl *template.Template, data any) page {
 	}
 
 	return newPage(mediaTypeHTML+"; charset=utf-8", buf.Bytes())
-}
-
-// DiscoveryPath returns the path the documentation of the registered types
-// is served under, which is the path of the namespace, or "" when discovery
-// is off (no types registered, or [WithoutDiscovery]). Mount
-// [Handler.Discovery] there:
-//
-//	if path := h.DiscoveryPath(); path != "" {
-//		mux.Handle("GET "+path+"/", h.Discovery())
-//	}
-func (h *Handler) DiscoveryPath() string {
-	if h.discovery == nil {
-		return ""
-	}
-
-	return h.discovery.path
-}
-
-// Discovery returns an [http.Handler] that serves the documentation of the
-// registered types at their type URLs, so a client can dereference a
-// problem's type, as RFC 9457 recommends. It is never nil: with discovery
-// off, it answers every request with a 404 problem.
-func (h *Handler) Discovery() http.Handler {
-	return http.HandlerFunc(h.serveDiscovery)
-}
-
-// serveDiscovery serves one discovery request.
-func (h *Handler) serveDiscovery(w http.ResponseWriter, r *http.Request) {
-	d := h.discovery
-	if d == nil {
-		h.writeProblem(w, r, New(http.StatusNotFound))
-
-		return
-	}
-
-	doc, ok := d.lookup(r.URL.Path)
-	if !ok {
-		h.writeProblem(w, r, New(http.StatusNotFound))
-
-		return
-	}
-
-	writeDiscovery(w, r, doc.negotiate(requestOf(r).Accept).response())
-}
-
-// writeProblem answers a discovery request with p, completed and rendered
-// like any other problem, but without calling the OnError hook: no
-// application error occurred.
-func (h *Handler) writeProblem(w http.ResponseWriter, r *http.Request, p *Problem) {
-	req := requestOf(r)
-	ctx := withRequest(r.Context(), req)
-
-	h.complete(ctx, p)
-	res, _ := h.render(ctx, req, p)
-
-	writeDiscovery(w, r, res)
 }
 
 // writeDiscovery writes res as the answer to r: its headers merged into

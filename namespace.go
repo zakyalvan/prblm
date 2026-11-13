@@ -1,7 +1,6 @@
 package prblm
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"net/url"
@@ -32,30 +31,6 @@ func WithNamespace(ns string) Option {
 // [ErrInvalidStatus], it is a mistake in a mapper, describer or enricher,
 // so a hook can tell it apart from the error being answered with errors.Is.
 var ErrInvalidType = errors.New("prblm: problem type is not a valid sub-type")
-
-// resolveType turns the relative sub-type of p into a type under the
-// handler's namespace. An empty type, about:blank, an absolute URI such as a
-// urn: and an absolute path are kept. Any other relative type is a mistake:
-// it becomes about:blank, and is reported to the hook. Without a namespace, every type is kept.
-//
-// Only the configured namespace is used, never the request's Host header,
-// which a client controls.
-func (h *Handler) resolveType(ctx context.Context, p *Problem) {
-	if h.namespace == "" || isKeptType(p.Type) {
-		return
-	}
-
-	if isSubtype(p.Type) {
-		p.Type = h.namespace + "/" + p.Type
-
-		return
-	}
-
-	given := p.Type
-	p.Type = ""
-
-	h.report(ctx, fmt.Errorf("%w: %q", ErrInvalidType, given), p)
-}
 
 // isKeptType reports whether typ is never resolved against a namespace:
 // empty (about:blank), an absolute path, or a URI with a scheme, which
