@@ -28,7 +28,7 @@ Constraints:
 
 ## Slices
 
-Each slice ends with a releasable, working plugin registered on a real core handler and exercised over net/http. Later slices only add a plugin, and the last slice releases everything.
+Each slice ends with a releasable, working plugin registered on a real core handler and exercised over net/http. Later slices only add a plugin, and the last slice checks that everything is ready to release; `release-v0-1-0` releases it.
 
 1. **`sqlmap` in the root module.**
    - At its end: `prblm.NewHandler(prblm.WithMappers(sqlmap.Mapper()))` turns `sql.ErrNoRows` into a 404 problem and `driver.ErrBadConn` into a 503 problem through `Wrap`. No new dependency, no new module.
@@ -46,9 +46,9 @@ Each slice ends with a releasable, working plugin registered on a real core hand
    - At its end: `ValidationErrors` becomes a 422 problem with `errors` entries, pointers or the `field` fallback, configurable status, type and title, and translation per request. It renders in JSON and XML.
    - Scenarios: all validation-error-mapping scenarios.
    - Hot paths: entry building, pointer building, translator selection.
-5. **Release.**
-   - At its end: the repository belongs to `kartaladev`, the core is tagged `v0.1.0` (including `sqlmap`), the adapter and plugin modules require that tag with no replace, pass `GOWORK=off` against it, and are tagged `v0.1.0`.
-   - Requires `add-framework-adapters` to be complete, since its modules are tagged here too.
+5. **Release readiness.**
+   - At its end: every module passes the full verification, including `GOWORK=off` with the core replace, so the release can start.
+   - The release itself (the transfer to `kartaladev`, the CHANGELOG and the `v0.1.0` tags) is the `release-v0-1-0` change, split out so this change can merge before the transfer.
 
 ## Decisions
 
@@ -225,7 +225,7 @@ Embedded structs: the validator puts an embedded struct's name in the namespace 
 
 ## Migration Plan
 
-There's no migration. Release order, once every planned change is complete:
+There's no migration. The release is the `release-v0-1-0` change; its order, once every planned change is complete:
 1. Transfer the repository from `zakyalvan/prblm` to `kartaladev/prblm`, so the module path resolves.
 2. Tag the core `v0.1.0`; it includes `sqlmap`.
 3. In `ginprblm`, `fiberprblm` and `mappers/*`, remove the replace, require `v0.1.0`, run `go mod tidy` and `GOWORK=off go test` against the real tag, and commit. `internal/paritytest` and `internal/plugintest` are unpublished and keep their replaces.

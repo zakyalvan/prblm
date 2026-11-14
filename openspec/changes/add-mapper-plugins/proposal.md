@@ -2,7 +2,7 @@
 
 ## Why
 
-Most Go services return the same kinds of errors from their data and validation layers: database/sql sentinels, PostgreSQL errors from pgx, gorm sentinels and go-playground/validator errors. Each one needs a correct problem response. Writing those mappers in every service is repetitive and easy to get wrong in both directions: generic 500s for client mistakes, or row values and constraint names leaked to clients. This change ships opt-in mapper plugins that turn those errors into safe RFC 9457 problems using the core mapper API. It builds on `add-problem-details-core` (archived) and is implemented after `add-framework-adapters`, because it ends with the release of every module: the core, the adapters and the plugins.
+Most Go services return the same kinds of errors from their data and validation layers: database/sql sentinels, PostgreSQL errors from pgx, gorm sentinels and go-playground/validator errors. Each one needs a correct problem response. Writing those mappers in every service is repetitive and easy to get wrong in both directions: generic 500s for client mistakes, or row values and constraint names leaked to clients. This change ships opt-in mapper plugins that turn those errors into safe RFC 9457 problems using the core mapper API. It builds on `add-problem-details-core` (archived) and is implemented after `add-framework-adapters`. The release of every module (the core, the adapters and the plugins) was planned as its last step and is now the separate `release-v0-1-0` change, so this change can merge before the repository transfer.
 
 ## What Changes
 
@@ -74,7 +74,7 @@ Deliberately left out:
   - `github.com/kartaladev/prblm/mappers/pgxmap` (requires `github.com/jackc/pgx/v5`)
   - `github.com/kartaladev/prblm/mappers/validatormap` (requires `github.com/go-playground/validator/v10` and `github.com/go-playground/universal-translator`)
 - New package in the root module: `github.com/kartaladev/prblm/mappers/sqlmap`. It adds no dependency, and it ships in the core's `v0.1.0`.
-- **Release:** nothing is tagged until all planned changes are complete. Until then the plugin modules point at the core in this repository with `replace github.com/kartaladev/prblm => ../..`. The final step of this change transfers the repository to `kartaladev`, tags the core `v0.1.0`, removes the replaces, and tags the adapter and plugin modules.
+- **Release:** nothing is tagged until all planned changes are complete. Until then the plugin modules point at the core in this repository with `replace github.com/kartaladev/prblm => ../..`. The `release-v0-1-0` change then transfers the repository to `kartaladev`, tags the core `v0.1.0`, removes the replaces, and tags the adapter and plugin modules.
 - `go.work` gains the three new modules. CI gains per-module jobs and a check that the root module still has no third-party requirements.
 - **Public API (compatibility decision):** each plugin's `Mapper(opts ...Option) prblm.Mapper` constructor and its options. Nothing in the core API changes.
 - **Default responses (compatibility decision):**

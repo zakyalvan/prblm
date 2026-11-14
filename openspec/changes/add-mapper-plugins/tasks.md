@@ -120,17 +120,15 @@
 - [x] 6.1 Add a "Mapper plugins" section to the README (install per module, registration, defaults table with the `WithDatabaseDetail` warning, combining plugins); verify every snippet is mirrored by a compiling `Example`
 - [x] 6.2 Extend `RELEASING.md` with the plugin tags (`mappers/gormmap/vX.Y.Z`, `mappers/pgxmap/vX.Y.Z`, `mappers/validatormap/vX.Y.Z`) the rule that the core is tagged first, and the step that removes each published module's replace before its tag; verify `GOWORK=off go list -m` resolves each module against local tags in a dry run
 
-## 7. Release
+## 7. Release readiness
+
+The release itself (transfer, CHANGELOG, tags; formerly 7.2–7.5) moved to the `release-v0-1-0` change, so this change can merge before the repository transfer.
 
 - [x] 7.1 Confirm `add-framework-adapters` is archived and every task above is done; run the full verification in every module (`-race`, vet, lint, `GOWORK=off go test ./...`, the root dependency check, cross-platform vet) and verify it passes
-- [ ] 7.2 Transfer `zakyalvan/prblm` to `kartaladev` (done by the repository owner) and point `origin` at `git@github.com:kartaladev/prblm.git`; verify `gh repo view kartaladev/prblm` succeeds and `git push` works
-- [ ] 7.3 Move the CHANGELOG `[Unreleased]` entries to `[0.1.0]` (core, `MergeInto`, `sqlmap`), tag the core `v0.1.0` and push the tag; verify `GOWORK=off go list -m github.com/kartaladev/prblm@v0.1.0` resolves with an empty module cache
-- [ ] 7.4 In `ginprblm`, `fiberprblm`, `mappers/gormmap`, `mappers/pgxmap` and `mappers/validatormap`, remove the core replace, require `v0.1.0` and run `go mod tidy`; verify `GOWORK=off go test -race ./...` passes in each against the real tag, `grep -l replace` finds no published `go.mod`, and CI is green
-- [ ] 7.5 Tag `ginprblm/v0.1.0`, `fiberprblm/v0.1.0`, `mappers/gormmap/v0.1.0`, `mappers/pgxmap/v0.1.0` and `mappers/validatormap/v0.1.0` on that commit and push them (no plugin requires another since 8.6); verify `GOWORK=off go list -m <module>@v0.1.0` resolves for each
 
 ## 8. Review fixes (PR #6 review and verification)
 
-Done before group 7 continues; 7.1 is re-run in 8.10.
+7.1 is re-run in 8.10.
 
 - [x] 8.1 Map gorm's foreign key and check constraint sentinels (gorm-error-mapping / Scenario: Translated constraint violations; Scenario: Degenerate inputs, row `ErrInvalidField`); verify `go test -run 'TestMapper_(ForeignKeyViolated|CheckConstraintViolated|Degenerate)'` passes in `mappers/gormmap`
   - RED: a real SQLite foreign key violation with `TranslateError: true` and `PRAGMA foreign_keys = ON`; a wrapped `ErrCheckConstraintViolated`; both currently 500
@@ -160,4 +158,4 @@ Done before group 7 continues; 7.1 is re-run in 8.10.
 
 ## Workflow follow-up
 
-- Archive the change after review, once group 7 is done.
+- Archive the change after review; the release continues in `release-v0-1-0`.
