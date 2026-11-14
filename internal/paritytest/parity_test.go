@@ -40,7 +40,7 @@ var returned = map[string]error{
 	caseBlacklisted: errBlacklisted,
 	caseSentinel:    fmt.Errorf("vessel 7: %w", prblm.ErrNotFound),
 	// gin raises this case with its own hint, c.AbortWithError.
-	caseSentinelHint: prblm.WithStatus(prblm.ErrNotFound, http.StatusBadRequest),
+	caseSentinelHint: prblm.WithStatus(prblm.ErrNotFound, http.StatusGone),
 }
 
 // Each case is selected with the query parameter "case", which the
@@ -52,8 +52,8 @@ const (
 	caseHint        = "hint"
 	caseBlacklisted = "blacklisted"
 	caseSentinel    = "sentinel"
-	// caseSentinelHint raises prblm.ErrNotFound with a 400 status hint,
-	// which the sentinel overrides.
+	// caseSentinelHint raises prblm.ErrNotFound with a 410 status hint around
+	// it, which decides over the sentinel.
 	caseSentinelHint = "sentinel-hint"
 )
 
@@ -119,7 +119,7 @@ func ginServer(t *testing.T, opts []prblm.Option) string {
 		case caseHint:
 			_ = c.AbortWithError(http.StatusForbidden, errors.New("x"))
 		case caseSentinelHint:
-			_ = c.AbortWithError(http.StatusBadRequest, prblm.ErrNotFound)
+			_ = c.AbortWithError(http.StatusGone, prblm.ErrNotFound)
 		default:
 			_ = c.Error(returned[name])
 		}
@@ -252,7 +252,7 @@ func TestParity(t *testing.T) {
 		// error-sentinels / Scenario: Adapter parity.
 		{name: "sentinel", path: pathVessel, caseName: caseSentinel, contains: `"detail":"The requested resource was not found."`, status: http.StatusNotFound, contentType: "application/problem+json"},
 		{name: "sentinel as xml", path: pathVessel, caseName: caseSentinel, accept: "application/problem+xml", status: http.StatusNotFound, contentType: "application/problem+xml"},
-		{name: "sentinel over a status hint", path: pathVessel, caseName: caseSentinelHint, contains: `"detail":"The requested resource was not found."`, status: http.StatusNotFound, contentType: "application/problem+json"},
+		{name: "status hint around a sentinel", path: pathVessel, caseName: caseSentinelHint, contains: `"title":"Gone"`, status: http.StatusGone, contentType: "application/problem+json"},
 		{
 			name:        "resolved type",
 			path:        pathContract,

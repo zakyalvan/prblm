@@ -98,8 +98,11 @@ error as returned.
 - A sentinel is found as `errors.Is` reports it: wrapped with `%w`, joined with `errors.Join`, or
   reported by the `Is` method of your own error type. Test for it with `errors.Is`, not `==`.
 - Your own code comes first: a problem or describer in the chain, a scoped mapper or a consumer
-  mapper such as `prblm.Is(prblm.ErrNotFound, ...)` replaces the default problem.
-- A sentinel beats a `WithStatus` hint: `prblm.WithStatus(prblm.ErrNotFound, 400)` is a 404.
+  mapper such as `prblm.Is(prblm.ErrNotFound, ...)` replaces the default problem. It matches
+  anywhere in the chain, even inside an outer sentinel, and a wrapped problem from `prblm.Parse`
+  answers with its own status and detail.
+- Between a sentinel and a status hint, the outer one decides: `prblm.WithStatus(prblm.ErrNotFound, 410)`
+  is a 410, and so is gin's `c.AbortWithError(410, err)` when `err` wraps `ErrNotFound`.
 - When an error matches several sentinels, the first one found wins, in the order `errors.Is`
   walks the chain: the outermost error first, wrapped errors in the order given. So
   `fmt.Errorf("%w: %w", prblm.ErrBadGateway, upstreamErr)` is a 502 even when `upstreamErr` wraps
@@ -502,9 +505,9 @@ app.Get("/v1/vessels/:id", func(fiber.Ctx) error {
 })
 ```
 
-The code of a `*fiber.Error` is a status hint, used only when no mapper or self-describing error
-recognizes the error; its message (`Cannot GET /x`, or `fiber.NewError(403, "token abc
-expired")`) is never sent.
+The code of a `*fiber.Error` is a status hint around the whole error, used only when no mapper or
+self-describing error recognizes the error, and it decides over any sentinel in the chain; its
+message (`Cannot GET /x`, or `fiber.NewError(403, "token abc expired")`) is never sent.
 
 **Recovery and route groups:** `fiberprblm.Recovery()` turns a panic into an error returned to the
 error handler; pair it with `ErrorHandler` to get the safe 500 problem and the panic value and

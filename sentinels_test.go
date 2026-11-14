@@ -349,6 +349,15 @@ func TestSentinels_Override(t *testing.T) {
 			err:  lockedVesselError{}, expected: 409, typ: "about:blank",
 		},
 		{
+			name: "consumer mapper for an inner sentinel",
+			opts: []prblm.Option{prblm.WithMappers(prblm.Status(prblm.ErrNotFound, 410))},
+			err:  fmt.Errorf("%w: %w", prblm.ErrBadGateway, fmt.Errorf("upstream: %w", prblm.ErrNotFound)), expected: 410, typ: "about:blank",
+		},
+		{
+			name: "problem inside an outer sentinel",
+			err:  fmt.Errorf("%w: %w", prblm.ErrBadGateway, prblm.New(422)), expected: 422, typ: "about:blank",
+		},
+		{
 			name: "consumer mapper declines",
 			opts: []prblm.Option{prblm.WithMappers(prblm.Is(prblm.ErrNotFound, func(error) *prblm.Problem { return nil }))},
 			err:  wrapped, expected: 404, typ: "about:blank",
@@ -439,14 +448,22 @@ func TestSentinels_Hint(t *testing.T) {
 		expected int
 		detail   string
 	}{
-		{name: "hint outside", err: prblm.WithStatus(prblm.ErrNotFound, 400), expected: 404, detail: "The requested resource was not found."},
+		{name: "hint outside", err: prblm.WithStatus(prblm.ErrNotFound, 410), expected: 410},
+		{name: "hint around the sentinel, wrapped", err: fmt.Errorf("x: %w", prblm.WithStatus(prblm.ErrConflict, 422)), expected: 422},
+		{name: "hint around a wrapped sentinel", err: prblm.WithStatus(fmt.Errorf("repo: %w", prblm.ErrNotFound), 410), expected: 410},
 		{
-			name:     "hint inside",
-			err:      fmt.Errorf("x: %w", prblm.WithStatus(prblm.ErrConflict, 422)),
-			expected: 409,
-			detail:   "The request conflicts with the current state of the resource.",
+			name:     "sentinel around a hint",
+			err:      fmt.Errorf("%w: %w", prblm.ErrBadGateway, prblm.WithStatus(errors.New("upstream"), 404)),
+			expected: 502,
+			detail:   "An upstream service returned an invalid response.",
 		},
 		{name: "hint not an error status", err: prblm.WithStatus(prblm.ErrNotFound, 200), expected: 404, detail: "The requested resource was not found."},
+		{
+			name:     "outermost hint not an error status",
+			err:      prblm.WithStatus(prblm.WithStatus(prblm.ErrNotFound, 410), 200),
+			expected: 404,
+			detail:   "The requested resource was not found.",
+		},
 		{name: "built-ins disabled", opts: []prblm.Option{prblm.WithoutBuiltins()}, err: prblm.WithStatus(prblm.ErrNotFound, 400), expected: 400},
 	}
 

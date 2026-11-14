@@ -114,6 +114,12 @@
 - [x] 5.2 Update the docs for the new order and the review's doc findings: the `sentinels.go` group godoc, the `builtins.go` comments, README and CHANGELOG; `doc.go` step 3 names "your own" sentinel errors; `ErrNotFound` godoc points to `WithStatus` on the application's own error for a 410; verify `go test -run Example` passes
 - [x] 5.3 Verify: `gofmt`, `go vet`, `golangci-lint run ./...`, `go test -race ./...` and `GOWORK=off go test ./...` in the root module, `go test -race ./...` in `internal/paritytest`, `go tool cover -func` covers the walk; gopls `go_diagnostics` on changed files
 
+- [x] 5.4 Let the outer of a sentinel and a status hint decide (error-sentinels / Scenario: Sentinel and hint together, all rows; Scenario: Adapter parity, gin abort row); verify `go test -race -run TestSentinels_Hint` in the root and `go test -race ./...` in `internal/paritytest` pass
+  - RED: the changed and new hint rows, and the gin `AbortWithError(410, ...)` parity row; they fail with "a sentinel beats any hint"
+  - GREEN: `mapSentinel` stops its walk at the hint step 5 would use
+  - REFACTOR: /simplify
+- [x] 5.5 Document the limits of the order and the hint rule: the order is among sentinels only (a problem, describer or matching mapper anywhere in the chain decides first, with `Override` rows for an inner mapped sentinel and a problem inside an outer sentinel); the outer of a sentinel and a hint decides, in `sentinels.go`, `status.go`, README, CHANGELOG and the fiber adapter docs; the table comment says non-descending; verify lint and `go test -run Example` pass
+
 ## Workflow follow-up
 
 - Archive the change after review, once group 4 is done.

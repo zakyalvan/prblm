@@ -46,7 +46,7 @@ type sentinel struct {
 	detail string
 }
 
-// sentinels lists the sentinel errors with their problems, by ascending
+// sentinels lists the sentinel errors with their problems, by non-descending
 // status. The order only breaks a tie within one error whose Is method
 // reports several sentinels: the lowest status wins.
 var sentinels = []sentinel{
@@ -64,9 +64,15 @@ var sentinels = []sentinel{
 
 // mapSentinel maps the first sentinel found in err's chain to an about:blank
 // problem with the sentinel's status and fixed detail, or returns nil when the
-// chain holds none. The detail never comes from the error text.
+// chain holds none before the status hint that would apply, which then
+// decides instead. The detail never comes from the error text.
 func mapSentinel(_ context.Context, err error) *Problem {
-	s := firstSentinel(err)
+	var stop error // a nil interface when no hint applies, never a typed nil
+	if hint := applicableHint(err); hint != nil {
+		stop = hint
+	}
+
+	s := firstSentinel(err, stop)
 	if s == nil {
 		return nil
 	}
@@ -75,10 +81,11 @@ func mapSentinel(_ context.Context, err error) *Problem {
 }
 
 // firstSentinel walks err's chain in errors.Is order and returns the first
-// sentinel an error is or reports, or nil (see the sentinel docs for why the
-// outermost wins). errors.Is alone can't say where in the chain a match is.
-func firstSentinel(err error) *sentinel {
-	if err == nil {
+// sentinel an error is or reports, or nil when it reaches stop or the end
+// (see the sentinel docs for why the outermost wins). errors.Is alone can't
+// say where in the chain a match is.
+func firstSentinel(err, stop error) *sentinel {
+	if err == nil || err == stop { //nolint:errorlint // stop is one link of this chain
 		return nil
 	}
 
@@ -88,10 +95,10 @@ func firstSentinel(err error) *sentinel {
 
 	switch u := err.(type) { //nolint:errorlint // one link of the chain, as errors.Is unwraps it
 	case interface{ Unwrap() error }:
-		return firstSentinel(u.Unwrap())
+		return firstSentinel(u.Unwrap(), stop)
 	case interface{ Unwrap() []error }:
 		for _, e := range u.Unwrap() {
-			if s := firstSentinel(e); s != nil {
+			if s := firstSentinel(e, stop); s != nil {
 				return s
 			}
 		}
