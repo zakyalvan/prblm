@@ -66,6 +66,75 @@ handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 })
 ```
 
+## Returning common errors
+
+For common outcomes, return one of the package's sentinel errors, directly or wrapped, and the
+handler answers with the matching problem: no mapper to register. *(Mirrors `ExampleErrNotFound`.)*
+
+```go
+handler := h.Wrap(func(_ http.ResponseWriter, r *http.Request) error {
+	// The wrap text is for the logs; the client gets the fixed detail.
+	return fmt.Errorf("vessel %s: %w", r.PathValue("id"), prblm.ErrNotFound)
+})
+```
+
+| Sentinel | Status | Detail |
+|---|---|---|
+| `ErrInvalidInput` | 400 | `The request is invalid.` |
+| `ErrUnauthenticated` | 401 | `Authentication is required.` |
+| `ErrPermissionDenied` | 403 | `You are not allowed to perform this action.` |
+| `ErrNotFound` | 404 | `The requested resource was not found.` |
+| `ErrConflict` | 409 | `The request conflicts with the current state of the resource.` |
+| `ErrPreconditionFailed` | 412 | `A precondition of the request was not met.` |
+| `ErrRateLimited` | 429 | `Too many requests.` |
+| `ErrBadGateway` | 502 | `An upstream service returned an invalid response.` |
+| `ErrUnavailable` | 503 | `The service is temporarily unavailable.` |
+| `ErrUpstreamTimeout` | 504 | `An upstream service did not respond in time.` |
+
+Each problem is `about:blank` with the status phrase as title and the fixed detail. The wrap text,
+the error string and any wrapped cause never reach the client; the `OnError` hook receives the
+error as returned.
+
+- A sentinel is found as `errors.Is` reports it: wrapped with `%w`, joined with `errors.Join`, or
+  reported by the `Is` method of your own error type. Test for it with `errors.Is`, not `==`.
+- Your own code comes first: a problem or describer in the chain, a scoped mapper or a consumer
+  mapper such as `prblm.Is(prblm.ErrNotFound, ...)` replaces the default problem. It matches
+  anywhere in the chain, even inside an outer sentinel, and a wrapped problem from `prblm.Parse`
+  answers with its own status and detail.
+- Between a sentinel and a status hint, the outer one decides: `prblm.WithStatus(prblm.ErrNotFound, 410)`
+  is a 410, and so is gin's `c.AbortWithError(410, err)` when `err` wraps `ErrNotFound`.
+- When an error matches several sentinels, the first one found wins, in the order `errors.Is`
+  walks the chain: the outermost error first, wrapped errors in the order given. So
+  `fmt.Errorf("%w: %w", prblm.ErrBadGateway, upstreamErr)` is a 502 even when `upstreamErr` wraps
+  `ErrNotFound`. A sentinel wins over a standard library error, such as
+  `context.DeadlineExceeded`, in the same chain.
+- `WithoutBuiltins()` turns the sentinels off with the other built-ins.
+- `ErrPermissionDenied` (403) confirms that the resource exists; when that is itself secret, return
+  `ErrNotFound`.
+- `ErrPreconditionFailed` (412) is only for conditional request headers such as `If-Match`; when
+  the current state of the resource forbids the operation, return `ErrConflict` (409).
+- The dependency errors say whether a dependency answered badly (`ErrBadGateway`), is down
+  (`ErrUnavailable`) or is too slow (`ErrUpstreamTimeout`). Wrap a bare `context.DeadlineExceeded`
+  with `ErrUpstreamTimeout` to give the client the fixed detail.
+- The sentinels are your application's classification. A data layer's not-found error, such as
+  `sql.ErrNoRows`, is not one of them: map it, or wrap it with the sentinel where you decide it
+  means "not found".
+- No sentinel problem carries a header. The 429 and 503 have no `Retry-After`, since a sentinel
+  carries no delay: add it with a consumer mapper or an enricher that sets it by status (see
+  `ExampleErrRateLimited`). The 401 has no `WWW-Authenticate`, which RFC 9110 requires, because
+  the library cannot know your scheme: add it with a consumer mapper. *(Mirrors
+  `ExampleErrUnauthenticated`.)*
+
+```go
+h := prblm.NewHandler(prblm.WithMappers(
+	prblm.Is(prblm.ErrUnauthenticated, func(error) *prblm.Problem {
+		return prblm.New(http.StatusUnauthorized,
+			prblm.WithDetail("Authentication is required."),
+			prblm.WithHeader("WWW-Authenticate", `Bearer realm="api"`))
+	}),
+))
+```
+
 ## Mapping errors
 
 `Resolve` tries these steps in order, and the first that recognizes the error wins:
@@ -73,8 +142,9 @@ handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 1. a `*Problem` or `Describer` in the error chain describes itself
 2. mappers scoped to the request with `ScopeMappers`, newest scope first
 3. the handler's own mappers (`WithMappers`), in registration order
-4. built-in mappers for malformed, truncated or oversized request bodies and for deadline errors
-   (`WithoutBuiltins` turns them off)
+4. built-in mappers: for the sentinel errors such as `ErrNotFound` (see
+   [Returning common errors](#returning-common-errors)), then for malformed, truncated or oversized
+   request bodies and for deadline errors (`WithoutBuiltins` turns them off)
 5. a status hint attached with `WithStatus`
 6. the safe fallback: a 500 with no detail
 
@@ -435,9 +505,9 @@ app.Get("/v1/vessels/:id", func(fiber.Ctx) error {
 })
 ```
 
-The code of a `*fiber.Error` is a status hint, used only when no mapper or self-describing error
-recognizes the error; its message (`Cannot GET /x`, or `fiber.NewError(403, "token abc
-expired")`) is never sent.
+The code of a `*fiber.Error` is a status hint around the whole error, used only when no mapper or
+self-describing error recognizes the error, and it decides over any sentinel in the chain; its
+message (`Cannot GET /x`, or `fiber.NewError(403, "token abc expired")`) is never sent.
 
 **Recovery and route groups:** `fiberprblm.Recovery()` turns a panic into an error returned to the
 error handler; pair it with `ErrorHandler` to get the safe 500 problem and the panic value and
@@ -507,6 +577,7 @@ themselves differ:
 |---|---|---|---|
 | Unmapped errors | 500 with title "Internal Server Error" and no detail | never leak internals | consumer mappers |
 | Built-in mappers | on | common request body errors get a correct 4xx without setup | `WithoutBuiltins()` |
+| Sentinel errors (`ErrNotFound`, ...) | mapped to their status, `about:blank`, with a fixed detail | a returned sentinel works without setup and leaks no wrap text | a consumer mapper; `WithoutBuiltins()` |
 | `type` | `about:blank`, omitted from the document | the RFC 9457 default | set per problem |
 | Type namespace | none: types written as given | no change for code that writes full type URIs | `WithNamespace` |
 | Invalid relative type (with a namespace) | `about:blank` with the status phrase as title, and a note to the hook | a broken link is worse than none | — |

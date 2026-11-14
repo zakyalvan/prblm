@@ -89,8 +89,9 @@ func NewHandler(opts ...Option) *Handler {
 //  1. the outermost *Problem or [Describer] in the chain of err
 //  2. the mappers scoped to ctx with [ScopeMappers], newest scope first
 //  3. the handler's own mappers, in registration order
-//  4. the built-in mappers for request body and deadline errors
-//     (see [WithoutBuiltins])
+//  4. the built-in mappers: the sentinel errors such as [ErrNotFound], unless
+//     the status hint of step 5 wraps them, then request body and deadline
+//     errors (see [WithoutBuiltins])
 //  5. a status hint attached with [WithStatus]
 //  6. the fallback: a 500 problem that carries none of the error's text
 //
@@ -846,15 +847,28 @@ func selfDescribed(err error) *Problem {
 	return d.Problem()
 }
 
-// hinted returns a problem for the outermost status hint in the chain of err,
-// or nil when there is none or it is not an error status.
+// hinted returns a problem for the status hint that applies to err (see
+// [applicableHint]), or nil when none does.
 func hinted(err error) *Problem {
+	hint := applicableHint(err)
+	if hint == nil {
+		return nil
+	}
+
+	return &Problem{Status: hint.status}
+}
+
+// applicableHint returns the status hint that decides for err when nothing
+// else recognizes it: the outermost one in the chain, if its status is an
+// error status, or nil. The sentinel mapper stops at the same hint, so the
+// outer of a sentinel and this hint decides.
+func applicableHint(err error) *statusError {
 	hint, ok := errors.AsType[*statusError](err)
 	if !ok || !isErrorStatus(hint.status) {
 		return nil
 	}
 
-	return &Problem{Status: hint.status}
+	return hint
 }
 
 // isNilMapper reports whether m is nil or a nil [MapperFunc]. A nil

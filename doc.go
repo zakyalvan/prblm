@@ -30,12 +30,19 @@
 //  2. Mappers attached to the request with [ScopeMappers], for example by a
 //     middleware on a group of routes.
 //  3. The handler's own mappers, registered with [WithMappers], in order.
-//     [Is], [As] and [Status] build mappers for sentinel and typed errors;
-//     [MapperFunc] adapts any function.
-//  4. Built-in mappers for malformed, truncated or oversized request bodies and
-//     for deadline errors (see [WithoutBuiltins]).
+//     [Is], [As] and [Status] build mappers for your own sentinel and typed
+//     errors; [MapperFunc] adapts any function.
+//  4. Built-in mappers: for the sentinel errors the application returns,
+//     such as [ErrNotFound], unless the status hint of step 5 wraps them,
+//     then for malformed, truncated or oversized request bodies and for
+//     deadline errors (see [WithoutBuiltins]).
 //  5. A status hint attached with [WithStatus].
 //  6. The safe fallback: a 500 problem without detail.
+//
+// For common outcomes, return one of the package's sentinel errors, such as
+// [ErrNotFound], directly or wrapped, and skip the mapper:
+//
+//	return fmt.Errorf("vessel %d: %w", id, prblm.ErrNotFound) // a 404 problem
 //
 // A mapper returns nil for an error it does not recognize. Enrichers
 // registered with [WithEnrichers] then complete every problem, and the

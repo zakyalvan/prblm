@@ -224,6 +224,21 @@ func TestErrorHandler_FiberErrors_MapperWins(t *testing.T) {
 	}
 }
 
+// The code of a fiber error is a hint around the whole error, so it decides
+// even over a sentinel outside the fiber error (error-sentinels / Requirement: The
+// outer of a sentinel and a status hint decides).
+func TestErrorHandler_FiberErrors_OverSentinel(t *testing.T) {
+	t.Parallel()
+
+	handler := func(fiber.Ctx) error {
+		return fmt.Errorf("%w: %w", prblm.ErrBadGateway, fiber.NewError(http.StatusGone, "vessel 7 scrapped"))
+	}
+
+	if res := serveX(t, handler); res.status != http.StatusGone {
+		t.Errorf("status = %d, want 410", res.status)
+	}
+}
+
 // Murphy row: a typed-nil *fiber.Error is a non-nil error with no code; it
 // is answered like any unmapped error.
 func TestErrorHandler_FiberErrors_TypedNil(t *testing.T) {

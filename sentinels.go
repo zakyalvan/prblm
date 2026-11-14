@@ -1,0 +1,121 @@
+package prblm
+
+import "errors"
+
+// Errors to return.
+//
+// An application returns one of these errors, or wraps it, to say what went
+// wrong, and the handler answers with the matching problem without any
+// mapper to register:
+//
+//	return fmt.Errorf("vessel %d: %w", id, prblm.ErrNotFound)
+//
+// The problem is about:blank with the error's status, the status phrase as
+// title and a fixed detail. The wrap text ("vessel 7"), the error string and
+// any wrapped cause never reach the client; the [OnError] hook receives the
+// error as returned, so log it there.
+//
+// A sentinel is found anywhere in the chain, as [errors.Is] reports it:
+// wrapped with %w, joined with [errors.Join], or reported by the Is method of
+// a domain error type. Test for it with errors.Is, never with ==, since a
+// wrapped error is not equal to the sentinel. Do not reassign these
+// variables: the handler keeps the original values, so errors built from a
+// new value no longer match.
+//
+// The mappings are built-in mappers (see [Handler.Resolve]): a problem or
+// [Describer] in the chain, a scoped mapper and a consumer mapper all come
+// first, so prblm.Is(prblm.ErrNotFound, ...) replaces the default problem.
+// They match anywhere in the chain, even inside an outer sentinel, so the
+// order below is among sentinels only; and a problem from [Parse] wrapped in
+// the chain answers with its own status and detail, so don't wrap one the
+// client must not see. [WithoutBuiltins] turns them off together with the
+// other built-ins.
+//
+// When an error matches several sentinels, the first one found wins, in the
+// order [errors.Is] walks the chain: an error before the errors it wraps,
+// wrapped errors in the order given. The outermost sentinel is the
+// application's own classification, while one it wraps is usually the cause,
+// so
+//
+//	fmt.Errorf("%w: %w", prblm.ErrBadGateway, upstreamErr)
+//
+// is a 502 even when upstreamErr wraps ErrNotFound. Likewise a sentinel wins
+// over a standard library error such as [context.DeadlineExceeded] in the
+// same chain.
+//
+// A [WithStatus] hint follows the same rule, so
+// WithStatus(fmt.Errorf("repo: %w", prblm.ErrNotFound), 410) is a 410, and so
+// is gin's c.AbortWithError(410, err).
+//
+// The sentinels are the application's own classification. A data layer's
+// not-found error, such as sql.ErrNoRows, is not one of them: map it with a
+// mapper, or wrap it with the sentinel where the application decides that it
+// means "not found".
+var (
+	// ErrInvalidInput reports that the request is invalid: a malformed or
+	// missing parameter, or a value the operation does not accept. It becomes
+	// a 400 Bad Request problem. For field-level validation details, map the
+	// validation error to a problem that lists them instead.
+	ErrInvalidInput = errors.New("prblm: invalid input")
+
+	// ErrUnauthenticated reports that the request has no valid credentials:
+	// they are missing, expired or wrong. It becomes a 401 Unauthorized
+	// problem. For a caller who is known but not allowed, use
+	// [ErrPermissionDenied].
+	//
+	// RFC 9110 requires a WWW-Authenticate header on a 401, and the handler
+	// cannot know the authentication scheme, so the default problem has none.
+	// Add it with a consumer mapper for ErrUnauthenticated, which replaces
+	// the default problem, as the example shows.
+	ErrUnauthenticated = errors.New("prblm: unauthenticated")
+
+	// ErrPermissionDenied reports that the caller is known but not allowed to
+	// perform the action. It becomes a 403 Forbidden problem. A 403 confirms
+	// that the resource exists; when that is itself secret, return
+	// [ErrNotFound] instead.
+	ErrPermissionDenied = errors.New("prblm: permission denied")
+
+	// ErrNotFound reports that the requested resource does not exist. It
+	// becomes a 404 Not Found problem; a [WithStatus] hint around it, such as
+	// 410 Gone for a deleted resource, decides instead.
+	ErrNotFound = errors.New("prblm: not found")
+
+	// ErrConflict reports that the request conflicts with the current state
+	// of the resource: a duplicate, a state that forbids the operation, or a
+	// concurrent change. It becomes a 409 Conflict problem.
+	ErrConflict = errors.New("prblm: conflict")
+
+	// ErrPreconditionFailed reports that a conditional request header, such
+	// as If-Match or If-Unmodified-Since, does not hold, for example in
+	// optimistic concurrency control. It becomes a 412 Precondition Failed
+	// problem. It is only for those headers: when the current state of the
+	// resource forbids the operation, return [ErrConflict].
+	ErrPreconditionFailed = errors.New("prblm: precondition failed")
+
+	// ErrRateLimited reports that the caller sent too many requests. It
+	// becomes a 429 Too Many Requests problem without a Retry-After header,
+	// since a sentinel carries no delay; a client may then retry at once. Add
+	// the header with a consumer mapper for ErrRateLimited, or with an
+	// enricher that sets it on 429 problems, as the example shows.
+	ErrRateLimited = errors.New("prblm: rate limited")
+
+	// ErrBadGateway reports that a dependency answered, but with a response
+	// the service could not use: malformed, unexpected or an error of its
+	// own. It becomes a 502 Bad Gateway problem. For a dependency that is
+	// down, use [ErrUnavailable]; for one that is too slow,
+	// [ErrUpstreamTimeout].
+	ErrBadGateway = errors.New("prblm: bad gateway")
+
+	// ErrUnavailable reports that the service cannot handle the request for
+	// now, typically because a dependency it needs is down. It becomes a 503
+	// Service Unavailable problem without a Retry-After header, since a
+	// sentinel carries no delay; add one as for [ErrRateLimited].
+	ErrUnavailable = errors.New("prblm: unavailable")
+
+	// ErrUpstreamTimeout reports that a dependency did not respond in time.
+	// It becomes a 504 Gateway Timeout problem. A bare
+	// [context.DeadlineExceeded] already becomes a 504 without detail; wrap
+	// it with ErrUpstreamTimeout to say that the deadline was a dependency's
+	// and give the client the fixed detail.
+	ErrUpstreamTimeout = errors.New("prblm: upstream timeout")
+)

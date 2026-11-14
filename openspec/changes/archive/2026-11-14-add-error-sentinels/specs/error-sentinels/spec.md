@@ -128,6 +128,8 @@ A problem or describer in the chain, a request-scoped mapper and a consumer mapp
 | scoped mapper `prblm.Status(prblm.ErrNotFound, 410)` on the request | 410 | `about:blank` | the returned error |
 | the error is a problem with status 422 wrapping `prblm.ErrNotFound` | 422 | `about:blank` | the returned error |
 | the error is a describer with status 409 whose `Is` reports `prblm.ErrNotFound` | 409 | `about:blank` | the returned error |
+| consumer mapper `prblm.Status(prblm.ErrNotFound, 410)`, and the error is `fmt.Errorf("%w: %w", prblm.ErrBadGateway, fmt.Errorf("upstream: %w", prblm.ErrNotFound))` | 410 | `about:blank` | the returned error |
+| the error is `fmt.Errorf("%w: %w", prblm.ErrBadGateway, <a problem with status 422>)` | 422 | `about:blank` | the returned error |
 
 ##### Examples: faulty consumer code falls back to the sentinel
 | setup | status | type | hook |
@@ -136,8 +138,8 @@ A problem or describer in the chain, a request-scoped mapper and a consumer mapp
 | consumer mapper that panics | 404 | `about:blank` | a panic error, then the returned error |
 | a describer returning nil whose `Is` reports `prblm.ErrNotFound` | 404 | `about:blank` | the returned error |
 
-### Requirement: Sentinels take precedence over status hints
-A sentinel in the chain SHALL decide the status even when the error also carries a status hint, in either nesting order. The hint SHALL apply only when built-ins are disabled.
+### Requirement: The outer of a sentinel and a status hint decides
+Between a sentinel and a status hint in the same chain, the one found first in `errors.Is` order SHALL decide the status: a hint that wraps the sentinel wins, and a sentinel that wraps the hint wins. Only the hint that would apply on its own counts: the outermost one, with a status in 400–599.
 
 #### Scenario: Sentinel and hint together
 - **Given** a handler with `<builtins>`
@@ -147,9 +149,12 @@ A sentinel in the chain SHALL decide the status even when the error also carries
 ##### Examples:
 | builtins | error | status | detail |
 |----------|-------|--------|--------|
-| default options | `prblm.WithStatus(prblm.ErrNotFound, 400)` | 404 | `The requested resource was not found.` |
-| default options | `fmt.Errorf("x: %w", prblm.WithStatus(prblm.ErrConflict, 422))` | 409 | `The request conflicts with the current state of the resource.` |
+| default options | `prblm.WithStatus(prblm.ErrNotFound, 410)` | 410 | (none) |
+| default options | `fmt.Errorf("x: %w", prblm.WithStatus(prblm.ErrConflict, 422))` | 422 | (none) |
+| default options | `prblm.WithStatus(fmt.Errorf("repo: %w", prblm.ErrNotFound), 410)` | 410 | (none) |
+| default options | `fmt.Errorf("%w: %w", prblm.ErrBadGateway, prblm.WithStatus(errors.New("upstream"), 404))` | 502 | `An upstream service returned an invalid response.` |
 | default options | `prblm.WithStatus(prblm.ErrNotFound, 200)` | 404 | `The requested resource was not found.` |
+| default options | `prblm.WithStatus(prblm.WithStatus(prblm.ErrNotFound, 410), 200)` | 404 | `The requested resource was not found.` |
 | built-ins disabled | `prblm.WithStatus(prblm.ErrNotFound, 400)` | 400 | (none) |
 
 ### Requirement: Sentinels are disabled with the other built-ins
@@ -168,7 +173,7 @@ Disabling the built-in mappers SHALL also disable the sentinel mappings, so a se
 | consumer mapper `prblm.Status(prblm.ErrNotFound, 404)` | `prblm.ErrNotFound` | 404 | (none) |
 
 ### Requirement: Order when an error matches several built-ins
-When an error chain matches several sentinels, the sentinel with the lowest status SHALL win. A sentinel SHALL win over a standard-library built-in in the same chain, because the application chose it.
+When an error chain matches several sentinels, the first one found in `errors.Is` order SHALL win: an error before the errors it wraps, wrapped errors in the order given. Within one error whose `Is` method reports several, the lowest status SHALL win. A sentinel SHALL win over a standard-library built-in in the same chain.
 
 #### Scenario: Several matches in one chain
 - **Given** a handler with zero configuration
@@ -178,8 +183,13 @@ When an error chain matches several sentinels, the sentinel with the lowest stat
 ##### Examples:
 | error | status | detail |
 |-------|--------|--------|
-| `errors.Join(prblm.ErrConflict, prblm.ErrNotFound)` | 404 | `The requested resource was not found.` |
-| `errors.Join(prblm.ErrUnavailable, prblm.ErrInvalidInput)` | 400 | `The request is invalid.` |
+| `fmt.Errorf("%w: %w", prblm.ErrBadGateway, fmt.Errorf("upstream: %w", prblm.ErrNotFound))` | 502 | `An upstream service returned an invalid response.` |
+| `fmt.Errorf("vessel 7: %w", fmt.Errorf("%w: %w", prblm.ErrUnavailable, prblm.ErrInvalidInput))` | 503 | `The service is temporarily unavailable.` |
+| `errors.Join(prblm.ErrConflict, prblm.ErrNotFound)` | 409 | `The request conflicts with the current state of the resource.` |
+| `errors.Join(prblm.ErrUnavailable, prblm.ErrInvalidInput)` | 503 | `The service is temporarily unavailable.` |
+| `errors.Join(errors.New("audit"), fmt.Errorf("x: %w", prblm.ErrNotFound), prblm.ErrConflict)` | 404 | `The requested resource was not found.` |
+| a custom error whose `Is` method reports both `prblm.ErrConflict` and `prblm.ErrNotFound` | 404 | `The requested resource was not found.` |
+| a custom error whose `Is` method reports `prblm.ErrConflict`, wrapping `prblm.ErrNotFound` | 409 | `The request conflicts with the current state of the resource.` |
 | `fmt.Errorf("%w: %w", prblm.ErrUpstreamTimeout, context.DeadlineExceeded)` | 504 | `An upstream service did not respond in time.` |
 | `fmt.Errorf("%w: %w", prblm.ErrUnavailable, context.DeadlineExceeded)` | 503 | `The service is temporarily unavailable.` |
 | `fmt.Errorf("%w: %w", prblm.ErrInvalidInput, a *json.SyntaxError)` | 400 | `The request is invalid.` |
@@ -217,7 +227,7 @@ Sentinel values and their built-in mappings SHALL be shared read-only, so concur
 | 100 |
 
 ### Requirement: Same responses in every adapter
-For the same options, the net/http, gin and fiber v3 adapters SHALL answer a sentinel with the same status, `Content-Type`, `Vary` and body bytes. An adapter's own status hint SHALL NOT override a sentinel.
+For the same options, the net/http, gin and fiber v3 adapters SHALL answer a sentinel with the same status, `Content-Type`, `Vary` and body bytes. An adapter's own status hint, such as gin's abort code, wraps the error, so it SHALL decide over a sentinel in it.
 
 #### Scenario: Adapter parity
 - **Given** one options slice shared by all adapters
@@ -231,4 +241,4 @@ For the same options, the net/http, gin and fiber v3 adapters SHALL answer a sen
 | gin | `c.Error(fmt.Errorf("vessel 7: %w", prblm.ErrNotFound))` | (none) | 404 | `application/problem+json` |
 | fiber v3 | returning `fmt.Errorf("vessel 7: %w", prblm.ErrNotFound)` | (none) | 404 | `application/problem+json` |
 | fiber v3 | returning `fmt.Errorf("vessel 7: %w", prblm.ErrNotFound)` | `application/problem+xml` | 404 | `application/problem+xml` |
-| gin | `c.AbortWithError(400, prblm.ErrNotFound)` | (none) | 404 | `application/problem+json` |
+| gin | `c.AbortWithError(410, prblm.ErrNotFound)` | (none) | 410 | `application/problem+json` |

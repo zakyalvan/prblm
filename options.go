@@ -14,9 +14,10 @@ func WithMappers(mappers ...Mapper) Option {
 	}
 }
 
-// WithoutBuiltins disables the built-in mappers for malformed, truncated and
-// oversized request bodies and for deadline errors. Without them those errors
-// resolve like any other unmapped error, to a 500.
+// WithoutBuiltins disables the built-in mappers: those for the sentinel
+// errors such as [ErrNotFound], for malformed, truncated and oversized
+// request bodies, and for deadline errors. Without them those errors resolve
+// like any other unmapped error, to their [WithStatus] hint or a 500.
 func WithoutBuiltins() Option {
 	return func(h *Handler) {
 		h.builtins = nil

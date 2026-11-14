@@ -35,7 +35,7 @@ Each slice ends with a releasable core: the sentinels it adds work through net/h
 2. **Client errors: `ErrInvalidInput` (400), `ErrUnauthenticated` (401), `ErrPermissionDenied` (403), `ErrConflict` (409).**
    - At its end: four more rows in the catalog table; nothing else changes.
    - Scenarios: their rows in "Sentinel returned directly", "Error text", "Context added by the application stays private", "Logging the full error" and "Sentinel and hint together"; the `ErrConflict`/`ErrNotFound` join row and the `*json.SyntaxError` row of "Several matches in one chain".
-   - Hot paths: the lowest-status-wins order between two sentinels.
+   - Hot paths: the order between two sentinels in one chain.
 3. **Request-state errors: `ErrPreconditionFailed` (412), `ErrRateLimited` (429).**
    - At its end: two more rows.
    - Scenarios: their rows in "Sentinel returned directly" and "Error text".
@@ -95,7 +95,7 @@ var builtins = []Mapper{
 }
 ```
 
-- `mapSentinel` walks `sentinels` in order and returns `&Problem{Status: s.status, Detail: s.detail}` for the first `errors.Is` match, or nil. Type stays empty (`about:blank`) and title stays empty, so `finalize` fills in the status phrase.
+- `mapSentinel` walks the error chain once, in `errors.Is` order, and returns `&Problem{Status: s.status, Detail: s.detail}` for the first error that is or reports a sentinel (the table order breaking a tie within one error), or nil (see D5). Type stays empty (`about:blank`) and title stays empty, so `finalize` fills in the status phrase.
 - A fresh problem per match, though the handler clones anyway, so nothing shared is ever handed out.
 - One mapper, not one per sentinel: a panicking `Is` method is reported once by this mapper instead of ten times, and adding a sentinel is one table row.
 - The table is ordered by ascending status, which is also the godoc order.
@@ -103,7 +103,7 @@ var builtins = []Mapper{
 - **Failure modes:**
   - **A custom `Is` method panics:** `safeCall` contains it; the sentinel mapper is no match and the hook gets a `*PanicError`. The standard-library `Is` built-ins call the same method and are contained the same way, so the hook can receive more than one panic note (spec row says "one or more").
   - **nil error:** `Resolve` returns before mapping.
-  - **A long `errors.Join` tree:** at most ten `errors.Is` walks; no allocation unless a sentinel matches.
+  - **A long `errors.Join` tree:** one walk, ten comparisons per error; no allocation unless a sentinel matches.
   - **Concurrent use:** the table is read-only after package init.
 
 ### D3. Names
@@ -129,8 +129,14 @@ var builtins = []Mapper{
 
 - Sentinels are built-ins (step 4). The `error-mapping` resolution order doesn't change, and steps 1 to 3 override them for free.
 - Inside step 4 the sentinel mapper runs first, before the standard-library built-ins. A sentinel is the application's explicit statement; a standard-library error in the same chain is usually its cause. `fmt.Errorf("%w: %w", ErrUnavailable, context.DeadlineExceeded)` answers 503, not 504.
-- Among sentinels, the lowest status wins: deterministic and documented, and a chain that names two outcomes is rare enough that a simple rule beats a clever one.
-- Sentinels beat a `WithStatus` hint (step 5), in either nesting order, because the hint is the lowest-priority signal by design. This keeps gin's `c.AbortWithError(400, prblm.ErrNotFound)` a 404, consistent with "a mapper still takes precedence over the hint" in `gin-adapter`.
+- Among sentinels, the first one found wins, in the order `errors.Is` and `errors.As` walk the chain (an error before what it wraps, wrapped errors in the order given). The outermost sentinel is the application's classification and an inner one is usually its cause: a gateway that wraps an upstream's `ErrNotFound` with `ErrBadGateway` answers 502, not 404. Within one error whose `Is` method reports several sentinels, the table order (lowest status) breaks the tie.
+  - *Alternative (first shipped, replaced after review):* the lowest status wins anywhere in the chain. Rejected: it can blame the client for a server failure, as in the gateway example.
+  - *Alternative:* the highest status wins. Rejected: it ignores what the application said, and a joined validation error plus a down dependency would answer 503, inviting a retry that can never succeed.
+  - The walk is `mapSentinel`'s own: it visits each error once and tests it with `==` (safe, since every sentinel's dynamic type is a comparable pointer) and its `Is` method, following `Unwrap() error` and `Unwrap() []error` like `errors.Is`. `errors.Is` alone can't tell where in the chain a match is.
+- Between a sentinel and a `WithStatus` hint, the outer one decides, by the same rule as between two sentinels: both are the application stating an outcome, and the one it added last is what it meant. `WithStatus(fmt.Errorf("repo: %w", ErrNotFound), 410)` answers 410, gin's `c.AbortWithError(410, repoErr)` answers 410, and a sentinel wrapping a hinted error answers the sentinel.
+  - `mapSentinel` finds the hint that step 5 would use (the outermost `*statusError`, if its status is in 400–599) and stops its walk there, so the hint answers at step 5. Mappers, describers and the other built-ins keep their precedence over hints, unchanged.
+  - fiber's `withHint` wraps the whole chain with the code of a `*fiber.Error` found anywhere in it, so a fiber code counts as the outermost hint and beats every sentinel in the chain. Accepted: a fiber error is the handler's own answer, and mixing one inside a sentinel chain is unusual. gin's abort code wraps the recorded error, which is the intended case.
+  - *Alternative (first shipped, replaced after review):* a sentinel beats any hint, in either nesting order. Rejected: an explicit outer `WithStatus` or abort code was silently ignored.
 - *Alternative:* append the sentinel mapper after the standard-library built-ins. Rejected for the cause-versus-statement reason above.
 - *Alternative:* a new resolution step between built-ins and hints. Rejected: it changes a spec'd order and needs its own opt-out, for no behavior a consumer would notice.
 - **Failure modes:**
@@ -168,7 +174,7 @@ No option loosens a safety default.
 
 ## Hot Paths
 
-- `mapSentinel`: the loop, the match return, the no-match return (an unrelated error, a look-alike, a `%v`-formatted sentinel).
+- `mapSentinel`: the chain walk (single and multiple unwrap), the match return, the no-match return (an unrelated error, a look-alike, a `%v`-formatted sentinel).
 - `builtins` order: sentinel mapper before the standard-library entries; `WithoutBuiltins` removing it.
 - Resolution through `safeCall` with a panicking `Is` method.
 - Response writing for a sentinel problem in JSON and XML through net/http, and through gin and fiber v3 by the parity test.
