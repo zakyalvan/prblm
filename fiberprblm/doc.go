@@ -26,9 +26,10 @@
 // # Fiber errors
 //
 // The code of a [*fiber.Error] in the error chain, including fiber's own 404
-// and 405 for unknown routes and methods, is used as a status hint: a mapper
-// or a self-describing error still takes precedence, and a code outside
-// 400–599 is ignored. Its message is never sent, so "Cannot GET /x" and
+// and 405 for unknown routes and methods, is used as a status hint around the
+// whole error: a mapper or a self-describing error still takes precedence, a
+// sentinel such as [prblm.ErrNotFound] anywhere in the chain does not, and a
+// code outside 400–599 is ignored. Its message is never sent, so "Cannot GET /x" and
 // messages such as fiber.NewError(403, "token abc expired") stay private.
 //
 // # Route groups
