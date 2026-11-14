@@ -5,4 +5,8 @@ use (
 	./fiberprblm
 	./ginprblm
 	./internal/paritytest
+	./internal/plugintest
+	./mappers/gormmap
+	./mappers/pgxmap
+	./mappers/validatormap
 )

@@ -59,6 +59,20 @@ When registered, an error chain containing `gorm.ErrDuplicatedKey` SHALL produce
 |--------|
 | 409 |
 
+### Requirement: Foreign key and check constraint violations
+When registered, an error chain containing `gorm.ErrForeignKeyViolated` SHALL produce a 409 problem with the detail `The resource references, or is referenced by, another resource.`, and one containing `gorm.ErrCheckConstraintViolated` SHALL produce a 422 problem with the detail `A value does not satisfy a constraint.`, the same problems the PostgreSQL mapper gives SQLSTATE `23503` and `23514`, without database values.
+
+#### Scenario: Translated constraint violations
+- **Given** the gorm mapper registered
+- **When** a handler returns `<error>`
+- **Then** the response status is `<status>` and the body contains no constraint name or value
+
+##### Examples:
+| error | status |
+|-------|--------|
+| `gorm.ErrForeignKeyViolated` from a real SQLite insert with `TranslateError: true` and foreign keys enabled | 409 |
+| `fmt.Errorf("save: %w", gorm.ErrCheckConstraintViolated)` | 422 |
+
 ### Requirement: Untranslated driver errors pass through
 The gorm mapper SHALL NOT match driver errors gorm did not translate, leaving them to other mappers such as the PostgreSQL mapper.
 
@@ -70,11 +84,25 @@ The gorm mapper SHALL NOT match driver errors gorm did not translate, leaving th
 ##### Examples:
 | mappers | status |
 |---------|--------|
-| gorm mapper, PostgreSQL mapper | 409 |
+| PostgreSQL mapper, gorm mapper | 409 |
 | gorm mapper only | 500 |
 
+### Requirement: The driver mapper registered first keeps its custom problems
+The documented registration order SHALL be the driver mapper before the gorm mapper. The PostgreSQL driver for gorm (v1.6.2 and later) keeps the `*pgconn.PgError` in the chain of a translated error, so with that order the PostgreSQL mapper's per-constraint and per-code problems apply whether translation is on or off.
+
+#### Scenario: Translated error with a constraint problem
+- **Given** gorm's PostgreSQL driver translating a `23505` error on constraint `users_email_key`, and the mappers `<mappers>` registered in that order, the PostgreSQL mapper with a constraint function for `users_email_key` returning a 422 problem
+- **When** a handler returns the translated error
+- **Then** the response status is `<status>`
+
+##### Examples:
+| mappers | status |
+|---------|--------|
+| PostgreSQL mapper, gorm mapper | 422 |
+| gorm mapper, PostgreSQL mapper | 409 |
+
 ### Requirement: Absent and other errors are not matched
-The gorm mapper SHALL report no match for nil and for any error other than its two sentinels, and SHALL NOT panic.
+The gorm mapper SHALL report no match for nil and for any error other than its four sentinels, and SHALL NOT panic.
 
 #### Scenario: Degenerate inputs
 - **Given** the gorm mapper used directly
@@ -87,6 +115,7 @@ The gorm mapper SHALL report no match for nil and for any error other than its t
 | `nil` | no match |
 | `gorm.ErrInvalidTransaction` | no match |
 | `gorm.ErrInvalidData` | no match |
+| `gorm.ErrInvalidField` | no match |
 | a typed-nil `*MyError` stored in an `error` | no match |
 
 ### Requirement: Mapped problems are customizable

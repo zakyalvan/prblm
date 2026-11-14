@@ -41,8 +41,14 @@ When registered, a PostgreSQL error in the chain SHALL be mapped by its SQLSTATE
 |------|--------|--------|
 | `40001` | 409 | `The request conflicted with a concurrent change; retry it.` |
 | `40P01` | 409 | `The request conflicted with a concurrent change; retry it.` |
-| `57014` | 503 | `The service is temporarily unavailable.` |
 | `53300` | 503 | `The service is temporarily unavailable.` |
+
+##### Examples: canceled statements
+`57014` (`query_canceled`) is raised by `statement_timeout` and by cancel requests. A retry would most likely hit the same timeout, so it maps to 504 like the core's `context.DeadlineExceeded`, without `Retry-After`.
+
+| code | status | detail |
+|------|--------|--------|
+| `57014` | 504 | `The request took too long to complete.` |
 
 #### Scenario: Unmapped codes fall through
 - **Given** a problem handler with the PostgreSQL mapper registered and no other mappers
@@ -59,7 +65,7 @@ When registered, a PostgreSQL error in the chain SHALL be mapped by its SQLSTATE
 | `ZZZZZ` |
 
 ### Requirement: Retryable errors advertise Retry-After
-Problems for codes `40001`, `40P01`, `57014` and `53300` SHALL carry a `Retry-After` header, 1 second by default. Consumers SHALL be able to set another positive number of seconds; zero or negative values SHALL be rejected at construction.
+The default problems for codes `40001`, `40P01` and `53300` SHALL carry a `Retry-After` header, 1 second by default. Problems returned by per-constraint and per-code functions SHALL be used as the function built them. Consumers SHALL be able to set another positive number of seconds; zero or negative values SHALL be rejected at construction.
 
 #### Scenario: Retry-After header
 - **Given** the PostgreSQL mapper registered with Retry-After `<setting>`
@@ -73,6 +79,7 @@ Problems for codes `40001`, `40P01`, `57014` and `53300` SHALL carry a `Retry-Af
 | default | `53300` | `1` |
 | 5 seconds | `40001` | `5` |
 | default | `23505` | (none) |
+| default | `57014` | (none) |
 
 #### Scenario: Invalid Retry-After setting
 - **When** the PostgreSQL mapper is constructed with Retry-After `<setting>`
@@ -141,7 +148,7 @@ Consumers SHALL be able to register a problem function for a named constraint. I
 | `users_email_key` | nil | the problem function |
 
 ### Requirement: Per-code problems
-Consumers SHALL be able to register a problem function for a SQLSTATE code, including codes the default table does not list. It SHALL replace the default for that code; a nil result SHALL fall back to the default table, or to no match for unlisted codes.
+Consumers SHALL be able to register a problem function for a SQLSTATE code, including codes the default table does not list. It SHALL replace the default for that code; a nil result SHALL fall back to the default table, or to no match for unlisted codes. Registering a code that is not five digits or upper-case ASCII letters, or a nil function, SHALL panic at construction.
 
 #### Scenario: Code overrides
 - **Given** the PostgreSQL mapper registered with code `<code>` mapped to a function that `<function>`
@@ -156,6 +163,20 @@ Consumers SHALL be able to register a problem function for a SQLSTATE code, incl
 | `23503` | returns nil | 409 |
 | `42P01` | returns nil | 500 |
 
+#### Scenario: Invalid code registration
+- **When** the PostgreSQL mapper is constructed with code `<code>` and function `<function>`
+- **Then** construction panics with a message naming `<argument>`
+
+##### Examples:
+| code | function | argument |
+|------|----------|----------|
+| (empty) | a valid function | the SQLSTATE code |
+| `2350` | a valid function | the SQLSTATE code |
+| `235050` | a valid function | the SQLSTATE code |
+| `40p01` | a valid function | the SQLSTATE code |
+| `23 05` | a valid function | the SQLSTATE code |
+| `23505` | nil | the problem function |
+
 ### Requirement: Absent and non-PostgreSQL errors are not matched
 The PostgreSQL mapper SHALL report no match for nil, for a typed-nil PostgreSQL error, and for errors without a PostgreSQL error in the chain, and SHALL NOT panic.
 
@@ -169,6 +190,6 @@ The PostgreSQL mapper SHALL report no match for nil, for a typed-nil PostgreSQL 
 |-------|--------|
 | `nil` | no match |
 | a typed-nil `*pgconn.PgError` stored in an `error` | no match |
-| `pgx.ErrNoRows` | no match |
+| `pgx.ErrNoRows` (mapped to 404 by the SQL mapper, since it wraps `sql.ErrNoRows`) | no match |
 | `errors.New("ERROR: duplicate key (SQLSTATE 23505)")` | no match |
 | `errors.Join(io.EOF, <a 23505 PostgreSQL error>)` | status 409 |

@@ -571,6 +571,109 @@ themselves differ:
 | Type documentation | mount `Handler.Discovery()` at `Handler.DiscoveryPath()` | `Middleware` via `engine.Use` serves unclaimed paths | `ErrorHandler` serves route-not-found paths |
 | Reporting shadowed documentation | not observable; documented only | `Middleware` notes it | opt-in `fiberprblm.Discovery(opts...)` via `app.Use` |
 
+## Mapper plugins
+
+Opt-in mappers for errors that most services return from their data and validation layers. Each
+one is a single `Mapper(opts...)` call, does nothing until it is registered, and answers with fixed,
+generic details: no SQL, no row values, no constraint names, no rejected input.
+
+| Package | Install | Maps |
+|---|---|---|
+| `mappers/sqlmap` | part of the core module | `sql.ErrNoRows` → 404, `driver.ErrBadConn` and `sql.ErrConnDone` → 503 |
+| `mappers/gormmap` | `go get github.com/kartaladev/prblm/mappers/gormmap` | `gorm.ErrRecordNotFound` → 404, `gorm.ErrDuplicatedKey` and `gorm.ErrForeignKeyViolated` → 409, `gorm.ErrCheckConstraintViolated` → 422 |
+| `mappers/pgxmap` | `go get github.com/kartaladev/prblm/mappers/pgxmap` | PostgreSQL errors by SQLSTATE: integrity violations → 409/422, retryable conflicts → 409 and capacity errors → 503, with `Retry-After`; statement timeouts (57014) → 504 |
+| `mappers/validatormap` | `go get github.com/kartaladev/prblm/mappers/validatormap` | `validator.ValidationErrors` → 422 with an `errors` member of `{detail, pointer}` entries |
+
+`sqlmap` uses only the standard library, so it lives in the core module. The others are modules of
+their own, so gorm, pgx and the validator never become dependencies of the core.
+
+```go
+h := prblm.NewHandler(prblm.WithMappers(sqlmap.Mapper()))
+// sql.ErrNoRows, wrapped or not:
+// {"title":"Not Found","status":404,"detail":"The requested resource was not found.","instance":"/v1/vessels/7"}
+```
+
+Errors a plugin does not recognize, such as `sql.ErrTxDone`, an unlisted SQLSTATE or a
+`*validator.InvalidValidationError`, go on to later mappers and finally to the safe 500. Every
+case can be replaced with an option (`sqlmap.WithNotFound`, `gormmap.WithDuplicatedKey`,
+`pgxmap.WithConstraint`, `pgxmap.WithCode`, `validatormap.WithStatus`, ...); a function that
+returns nil declines the error:
+
+```go
+pgxmap.Mapper(pgxmap.WithConstraint("users_email_key", func(*pgconn.PgError) *prblm.Problem {
+	return prblm.New(http.StatusConflict,
+		prblm.WithType("https://example.com/probs/email-taken"),
+		prblm.WithTitle("Email already registered"),
+		prblm.WithDetail("Sign in, or use another email address."),
+	)
+}))
+```
+
+### Validation problems
+
+```go
+// Report the names encoding/json uses, so pointers can be built.
+v := validator.New(validator.WithRequiredStructEnabled(), validator.WithTagNameFuncBlankOmit())
+v.RegisterTagNameFunc(validatormap.JSONName)
+
+h := prblm.NewHandler(prblm.WithMappers(validatormap.Mapper()))
+// {"title":"Unprocessable Entity","status":422,"detail":"The request is not valid.","instance":"/v1/vessels",
+//  "errors":[{"detail":"failed validation: required","pointer":"#/name"},{"detail":"failed validation: min","pointer":"#/crew"}]}
+```
+
+`validatormap.JSONName` follows `encoding/json`, including embedded structs, whose fields it promotes
+(`#/name`, not `#/Base/name`); that needs `WithTagNameFuncBlankOmit`. Without a tag name function,
+entries carry a `field` (the Go namespace) instead of a pointer, which would be wrong. A problem
+never mixes the two, so read `pointer` and fall back to `field`.
+
+gin's binding validator has no tag name function, so its entries carry `field`. Register
+`JSONName` on gin's engine before the first request (the validator caches names per type):
+
+```go
+if v, ok := binding.Validator.Engine().(*validator.Validate); ok {
+	v.RegisterTagNameFunc(validatormap.JSONName)
+}
+```
+
+gin creates its engine without `WithTagNameFuncBlankOmit`, so an embedded struct's Go name stays in
+its fields' pointers (`#/Base/name`). To flatten embedded structs too, replace `binding.Validator`
+with a validator created with that option.
+
+`validatormap.WithTranslator` picks a translator per request; a missing or failing translation falls
+back to `failed validation: <tag>`. A translator that panics still gives the 422, and the
+`*prblm.PanicError` becomes the problem's cause, which the `OnError` hook can find with `errors.As`.
+
+### Combining plugins
+
+Put a driver mapper before the gorm mapper. With gorm's `TranslateError` off, gorm passes the
+driver's error through; with it on, gorm's PostgreSQL driver wraps both its sentinel and the
+driver's error. Either way, `pgxmap` registered first answers with its `WithConstraint` and
+`WithCode` problems, and `gormmap` gets the bare sentinels other drivers return. The other plugins
+match disjoint errors, so their order doesn't matter. `pgx.ErrNoRows` wraps `sql.ErrNoRows`, so
+`sqlmap` maps it to 404.
+
+```go
+h := prblm.NewHandler(prblm.WithMappers(
+	sqlmap.Mapper(),
+	pgxmap.Mapper(), // before gormmap
+	gormmap.Mapper(),
+	validatormap.Mapper(),
+))
+```
+
+### Plugin defaults
+
+| Plugin | Behavior | Default | Change it with |
+|---|---|---|---|
+| all | registration | not active | `prblm.WithMappers(<name>map.Mapper())` |
+| all | detail | a fixed generic sentence | the per-case options |
+| pgxmap | PostgreSQL detail | hidden | `pgxmap.WithDatabaseDetail()`, **which exposes row values and schema names: internal APIs only** |
+| pgxmap | `Retry-After` on the default problems for 40001, 40P01, 53300 | 1 second | `pgxmap.WithRetryAfter` |
+| pgxmap | 57014 (statement timeout) | 504, no `Retry-After` | `pgxmap.WithCode("57014", ...)` |
+| validatormap | status | 422 | `validatormap.WithStatus` (400–499) |
+| validatormap | message | `failed validation: <tag>` | `validatormap.WithTranslator` |
+| validatormap | location | `pointer` with JSON names, otherwise `field`, never both in one problem | `validatormap.JSONName` |
+
 ## Defaults
 
 | Behavior | Default | Why | Change it with |

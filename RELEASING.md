@@ -15,19 +15,33 @@ their own modules in subdirectories, and depend on a released version of the roo
   | `github.com/kartaladev/prblm` | `.` | `vX.Y.Z` |
   | `github.com/kartaladev/prblm/ginprblm` | `ginprblm/` | `ginprblm/vX.Y.Z` |
   | `github.com/kartaladev/prblm/fiberprblm` | `fiberprblm/` | `fiberprblm/vX.Y.Z` |
+  | `github.com/kartaladev/prblm/mappers/gormmap` | `mappers/gormmap/` | `mappers/gormmap/vX.Y.Z` |
+  | `github.com/kartaladev/prblm/mappers/pgxmap` | `mappers/pgxmap/` | `mappers/pgxmap/vX.Y.Z` |
+  | `github.com/kartaladev/prblm/mappers/validatormap` | `mappers/validatormap/` | `mappers/validatormap/vX.Y.Z` |
+
+  `mappers/sqlmap` is a package of the root module, released with its tag.
 
 - Tag the root module first. A module that depends on a new core feature is released only after
   the core release it needs, and its `go.mod` requires that version.
-- `internal/paritytest` is an unpublished test module. It is never tagged, and it keeps its
-  `replace` directives so that it always compares the adapters in the repository.
+- Then tag the other modules. Each requires only the core, so they can be tagged together, on the
+  same commit.
+- `internal/paritytest` and `internal/plugintest` are unpublished test modules. They are never
+  tagged, and they keep their `replace` directives so that they always test the adapters and the
+  plugins in the repository. Tests that combine plugins (gorm over pgx, pgx over database/sql)
+  belong in `internal/plugintest`, so that no published plugin requires another.
 
 ## Before tagging
 
 1. Run the full check in every module, from the repository root:
 
    ```sh
-   ./.github/scripts/check-core-deps.sh && ./.github/scripts/check-no-fiber.sh . ginprblm
-   for module in . ginprblm fiberprblm internal/paritytest; do
+   ./.github/scripts/check-core-deps.sh
+   ./.github/scripts/check-no-fiber.sh . ginprblm mappers/gormmap mappers/pgxmap mappers/validatormap
+   ./.github/scripts/check-test-only-deps.sh mappers/gormmap gorm.io/driver/sqlite github.com/mattn/go-sqlite3
+   ./.github/scripts/check-test-only-deps.sh mappers/validatormap github.com/go-playground/locales/en \
+     github.com/go-playground/locales/id
+   for module in . ginprblm fiberprblm internal/paritytest internal/plugintest mappers/gormmap \
+     mappers/pgxmap mappers/validatormap; do
      (cd "$module" && go test -race ./... && go vet ./... && golangci-lint run ./... \
        && GOWORK=off go test ./...) || break
    done
@@ -39,12 +53,14 @@ their own modules in subdirectories, and depend on a released version of the roo
    `GOWORK=off` matters: it proves each module builds against what its own `go.mod` requires,
    not against the workspace.
 2. Move the `[Unreleased]` entries in `CHANGELOG.md` under a heading for the new version and date.
-3. In a module other than the root, make sure `go.mod` requires a released root version and has
-   no `replace` directive pointing into the repository. Until the first core release, `ginprblm`
-   and `fiberprblm` replace the core with `../`: remove that line and require the tagged core
-   (`go get github.com/kartaladev/prblm@vX.Y.Z` with `GOWORK=off`) before tagging them.
-   Consumers ignore `replace` directives, so a published module that still has one cannot be
-   built.
+3. In a module other than the root, make sure `go.mod` requires released versions and has no
+   `replace` directive pointing into the repository. Until the first core release, `ginprblm` and
+   `fiberprblm` replace the core with `../`, and the modules in `mappers/` with `../..`: remove
+   that line and require the tagged core (`go get github.com/kartaladev/prblm@vX.Y.Z` with
+   `GOWORK=off`), then run `GOWORK=off go mod tidy` and `GOWORK=off go test -race ./...` against
+   the real tag before tagging them. Consumers ignore `replace` directives, so a published module
+   that still has one cannot be built. Check with `grep -l '^replace' */go.mod mappers/*/go.mod`,
+   which must list nothing; only the unpublished `internal/*/go.mod` keep their replaces.
 
 ## Tagging
 
@@ -58,7 +74,11 @@ For a module in a subdirectory, use the directory prefix:
 ```sh
 git tag -a ginprblm/v0.1.0 -m "ginprblm v0.1.0"
 git tag -a fiberprblm/v0.1.0 -m "fiberprblm v0.1.0"
-git push origin ginprblm/v0.1.0 fiberprblm/v0.1.0
+git tag -a mappers/gormmap/v0.1.0 -m "gormmap v0.1.0"
+git tag -a mappers/pgxmap/v0.1.0 -m "pgxmap v0.1.0"
+git tag -a mappers/validatormap/v0.1.0 -m "validatormap v0.1.0"
+git push origin ginprblm/v0.1.0 fiberprblm/v0.1.0 mappers/gormmap/v0.1.0 mappers/pgxmap/v0.1.0 \
+  mappers/validatormap/v0.1.0
 ```
 
 ## Checking the release
@@ -69,6 +89,9 @@ After the push, confirm that the Go toolchain resolves the version outside the w
 GOWORK=off go list -m github.com/kartaladev/prblm@v0.1.0
 GOWORK=off go list -m github.com/kartaladev/prblm/ginprblm@v0.1.0
 GOWORK=off go list -m github.com/kartaladev/prblm/fiberprblm@v0.1.0
+GOWORK=off go list -m github.com/kartaladev/prblm/mappers/gormmap@v0.1.0
+GOWORK=off go list -m github.com/kartaladev/prblm/mappers/pgxmap@v0.1.0
+GOWORK=off go list -m github.com/kartaladev/prblm/mappers/validatormap@v0.1.0
 ```
 
 To rehearse this before pushing, point the module path at a local clone that carries the tag, and
@@ -81,7 +104,8 @@ git config --file "$GIT_CONFIG_GLOBAL" protocol.file.allow always
 git config --file "$GIT_CONFIG_GLOBAL" url."file://$PWD".insteadOf https://github.com/kartaladev/prblm
 cd "$(mktemp -d)"   # outside the repository and its go.work
 for module in github.com/kartaladev/prblm github.com/kartaladev/prblm/ginprblm \
-  github.com/kartaladev/prblm/fiberprblm; do
+  github.com/kartaladev/prblm/fiberprblm github.com/kartaladev/prblm/mappers/gormmap \
+  github.com/kartaladev/prblm/mappers/pgxmap github.com/kartaladev/prblm/mappers/validatormap; do
   GOWORK=off GOPROXY=direct GONOSUMDB=github.com/kartaladev/prblm GOFLAGS='-mod=mod -modcacherw' \
     go list -m "$module@v0.1.0"
 done
