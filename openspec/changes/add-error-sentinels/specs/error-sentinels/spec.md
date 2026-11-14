@@ -168,7 +168,7 @@ Disabling the built-in mappers SHALL also disable the sentinel mappings, so a se
 | consumer mapper `prblm.Status(prblm.ErrNotFound, 404)` | `prblm.ErrNotFound` | 404 | (none) |
 
 ### Requirement: Order when an error matches several built-ins
-When an error chain matches several sentinels, the sentinel with the lowest status SHALL win. A sentinel SHALL win over a standard-library built-in in the same chain, because the application chose it.
+When an error chain matches several sentinels, the first one found in `errors.Is` order SHALL win: an error before the errors it wraps, wrapped errors in the order given. Within one error whose `Is` method reports several, the lowest status SHALL win. A sentinel SHALL win over a standard-library built-in in the same chain.
 
 #### Scenario: Several matches in one chain
 - **Given** a handler with zero configuration
@@ -178,8 +178,13 @@ When an error chain matches several sentinels, the sentinel with the lowest stat
 ##### Examples:
 | error | status | detail |
 |-------|--------|--------|
-| `errors.Join(prblm.ErrConflict, prblm.ErrNotFound)` | 404 | `The requested resource was not found.` |
-| `errors.Join(prblm.ErrUnavailable, prblm.ErrInvalidInput)` | 400 | `The request is invalid.` |
+| `fmt.Errorf("%w: %w", prblm.ErrBadGateway, fmt.Errorf("upstream: %w", prblm.ErrNotFound))` | 502 | `An upstream service returned an invalid response.` |
+| `fmt.Errorf("vessel 7: %w", fmt.Errorf("%w: %w", prblm.ErrUnavailable, prblm.ErrInvalidInput))` | 503 | `The service is temporarily unavailable.` |
+| `errors.Join(prblm.ErrConflict, prblm.ErrNotFound)` | 409 | `The request conflicts with the current state of the resource.` |
+| `errors.Join(prblm.ErrUnavailable, prblm.ErrInvalidInput)` | 503 | `The service is temporarily unavailable.` |
+| `errors.Join(errors.New("audit"), fmt.Errorf("x: %w", prblm.ErrNotFound), prblm.ErrConflict)` | 404 | `The requested resource was not found.` |
+| a custom error whose `Is` method reports both `prblm.ErrConflict` and `prblm.ErrNotFound` | 404 | `The requested resource was not found.` |
+| a custom error whose `Is` method reports `prblm.ErrConflict`, wrapping `prblm.ErrNotFound` | 409 | `The request conflicts with the current state of the resource.` |
 | `fmt.Errorf("%w: %w", prblm.ErrUpstreamTimeout, context.DeadlineExceeded)` | 504 | `An upstream service did not respond in time.` |
 | `fmt.Errorf("%w: %w", prblm.ErrUnavailable, context.DeadlineExceeded)` | 503 | `The service is temporarily unavailable.` |
 | `fmt.Errorf("%w: %w", prblm.ErrInvalidInput, a *json.SyntaxError)` | 400 | `The request is invalid.` |

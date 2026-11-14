@@ -104,6 +104,18 @@ func TestSentinels_Direct(t *testing.T) {
 	}
 }
 
+// unwrapsNilError wraps nothing: its Unwrap returns nil.
+type unwrapsNilError struct{}
+
+func (unwrapsNilError) Error() string { return "unwraps nil" }
+func (unwrapsNilError) Unwrap() error { return nil }
+
+// listError wraps its entries as given, nil ones included, unlike errors.Join.
+type listError []error
+
+func (listError) Error() string     { return "list" }
+func (e listError) Unwrap() []error { return e }
+
 // error-sentinels / Scenario: Wrapped, joined and custom errors.
 func TestSentinels_Chain(t *testing.T) {
 	t.Parallel()
@@ -122,6 +134,9 @@ func TestSentinels_Chain(t *testing.T) {
 		{name: "similar text", err: errors.New("not found"), expected: 500},
 		//nolint:errorlint // %v breaks the chain on purpose: the look-alike must not match.
 		{name: "formatted with %v", err: fmt.Errorf("vessel 7: %v", prblm.ErrNotFound), expected: 500},
+		{name: "unwraps to nil", err: unwrapsNilError{}, expected: 500},
+		{name: "nil list entries", err: listError{nil, fmt.Errorf("x: %w", prblm.ErrNotFound), nil}, expected: 404},
+		{name: "empty list", err: listError{}, expected: 500},
 	}
 
 	for _, tt := range tests {
@@ -483,6 +498,26 @@ func TestSentinels_WithoutBuiltins(t *testing.T) {
 	}
 }
 
+// doubleSentinelError reports two sentinels through its Is method.
+type doubleSentinelError struct{}
+
+func (doubleSentinelError) Error() string { return "double" }
+
+func (doubleSentinelError) Is(target error) bool {
+	return target == prblm.ErrConflict || target == prblm.ErrNotFound
+}
+
+// conflictOverNotFoundError reports ErrConflict and wraps ErrNotFound.
+type conflictOverNotFoundError struct{}
+
+func (conflictOverNotFoundError) Error() string { return "conflict over not found" }
+
+func (conflictOverNotFoundError) Is(target error) bool {
+	return target == prblm.ErrConflict
+}
+
+func (conflictOverNotFoundError) Unwrap() error { return prblm.ErrNotFound }
+
 // error-sentinels / Scenario: Several matches in one chain.
 func TestSentinels_Order(t *testing.T) {
 	t.Parallel()
@@ -493,8 +528,28 @@ func TestSentinels_Order(t *testing.T) {
 		expected int
 		detail   string
 	}{
-		{name: "two sentinels", err: errors.Join(prblm.ErrConflict, prblm.ErrNotFound), expected: 404, detail: "The requested resource was not found."},
-		{name: "4xx before 5xx", err: errors.Join(prblm.ErrUnavailable, prblm.ErrInvalidInput), expected: 400, detail: "The request is invalid."},
+		{
+			name:     "outer sentinel over a wrapped one",
+			err:      fmt.Errorf("%w: %w", prblm.ErrBadGateway, fmt.Errorf("upstream: %w", prblm.ErrNotFound)),
+			expected: 502,
+			detail:   "An upstream service returned an invalid response.",
+		},
+		{
+			name:     "first of two wrapped",
+			err:      fmt.Errorf("vessel 7: %w", fmt.Errorf("%w: %w", prblm.ErrUnavailable, prblm.ErrInvalidInput)),
+			expected: 503,
+			detail:   "The service is temporarily unavailable.",
+		},
+		{name: "joined, first wins", err: errors.Join(prblm.ErrConflict, prblm.ErrNotFound), expected: 409, detail: "The request conflicts with the current state of the resource."},
+		{name: "joined, 5xx first", err: errors.Join(prblm.ErrUnavailable, prblm.ErrInvalidInput), expected: 503, detail: "The service is temporarily unavailable."},
+		{
+			name:     "joined, depth first",
+			err:      errors.Join(errors.New("audit"), fmt.Errorf("x: %w", prblm.ErrNotFound), prblm.ErrConflict),
+			expected: 404,
+			detail:   "The requested resource was not found.",
+		},
+		{name: "one error reporting two", err: doubleSentinelError{}, expected: 404, detail: "The requested resource was not found."},
+		{name: "reported before wrapped", err: conflictOverNotFoundError{}, expected: 409, detail: "The request conflicts with the current state of the resource."},
 		{name: "upstream timeout and deadline", err: fmt.Errorf("%w: %w", prblm.ErrUpstreamTimeout, context.DeadlineExceeded), expected: 504, detail: "An upstream service did not respond in time."},
 		{name: "unavailable and deadline", err: fmt.Errorf("%w: %w", prblm.ErrUnavailable, context.DeadlineExceeded), expected: 503, detail: "The service is temporarily unavailable."},
 		{name: "sentinel and json syntax error", err: fmt.Errorf("%w: %w", prblm.ErrInvalidInput, decodeErr(`{"age":}`)), expected: 400, detail: "The request is invalid."},

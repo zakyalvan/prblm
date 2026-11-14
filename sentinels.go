@@ -30,9 +30,16 @@ import "errors"
 // A sentinel names what happened, while a [WithStatus] hint only sets a
 // status when nothing else recognizes the error, so a sentinel in the chain
 // decides the status even when the error also carries a hint. When an error
-// matches several sentinels, the lowest status wins, and a sentinel wins over
-// a standard library error such as [context.DeadlineExceeded] in the same
-// chain, which is usually its cause.
+// matches several sentinels, the first one found wins, in the order
+// [errors.Is] walks the chain: an error before the errors it wraps, wrapped
+// errors in the order given. The outermost sentinel is the application's own
+// classification, while one it wraps is usually the cause, so
+//
+//	fmt.Errorf("%w: %w", prblm.ErrBadGateway, upstreamErr)
+//
+// is a 502 even when upstreamErr wraps ErrNotFound. Likewise a sentinel wins
+// over a standard library error such as [context.DeadlineExceeded] in the
+// same chain.
 //
 // The sentinels are the application's own classification. A data layer's
 // not-found error, such as sql.ErrNoRows, is not one of them: map it with a
@@ -63,7 +70,9 @@ var (
 	ErrPermissionDenied = errors.New("prblm: permission denied")
 
 	// ErrNotFound reports that the requested resource does not exist. It
-	// becomes a 404 Not Found problem.
+	// becomes a 404 Not Found problem. For a 410 Gone, put a [WithStatus]
+	// hint on the application's own error instead of wrapping ErrNotFound,
+	// since a sentinel wins over a hint.
 	ErrNotFound = errors.New("prblm: not found")
 
 	// ErrConflict reports that the request conflicts with the current state

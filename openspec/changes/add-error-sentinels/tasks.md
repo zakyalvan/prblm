@@ -105,6 +105,15 @@
 - [x] 4.5 Document the three sentinels (a dependency is down, slow, or answered badly; no `Retry-After` on 503; `ErrUpstreamTimeout` versus a bare `context.DeadlineExceeded`), complete the README catalog table and the CHANGELOG entry; verify `go test -run Example` passes
 - [x] 4.6 Verify the full catalog end to end (every sentinel through net/http in JSON and XML) and check `go tool cover -func` covers `mapSentinel` and the `builtins` order; run `gofmt`, `go vet`, `golangci-lint run ./...`, `go test -race ./...` and `GOWORK=off go test ./...` in the root module, `go test -race ./...` in `ginprblm`, `fiberprblm` and `internal/paritytest`; run gopls `go_diagnostics` on changed files
 
+## 5. Review follow-ups (PR #7)
+
+- [x] 5.1 Let the first sentinel in the chain win (error-sentinels / Scenario: Several matches in one chain, all rows); verify `go test -race -run 'TestSentinels_Order|TestSentinelTable'` passes
+  - RED: the new and changed rows (outer `ErrBadGateway` over an inner `ErrNotFound`, join order, a custom `Is` reporting two sentinels, a custom `Is` wrapping another sentinel); they fail with the lowest-status rule
+  - GREEN: `mapSentinel` walks the chain once in `errors.Is` order, testing each error with `==` and its `Is` method; `TestSentinelTable` allows equal statuses (non-descending), since the table order now only breaks a tie within one error
+  - REFACTOR: /simplify; keep `Chain`, `Degenerate` (a panicking `Is` still contained) and `Hint` green
+- [x] 5.2 Update the docs for the new order and the review's doc findings: the `sentinels.go` group godoc, the `builtins.go` comments, README and CHANGELOG; `doc.go` step 3 names "your own" sentinel errors; `ErrNotFound` godoc points to `WithStatus` on the application's own error for a 410; verify `go test -run Example` passes
+- [x] 5.3 Verify: `gofmt`, `go vet`, `golangci-lint run ./...`, `go test -race ./...` and `GOWORK=off go test ./...` in the root module, `go test -race ./...` in `internal/paritytest`, `go tool cover -func` covers the walk; gopls `go_diagnostics` on changed files
+
 ## Workflow follow-up
 
 - Archive the change after review, once group 4 is done.

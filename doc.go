@@ -30,8 +30,8 @@
 //  2. Mappers attached to the request with [ScopeMappers], for example by a
 //     middleware on a group of routes.
 //  3. The handler's own mappers, registered with [WithMappers], in order.
-//     [Is], [As] and [Status] build mappers for sentinel and typed errors;
-//     [MapperFunc] adapts any function.
+//     [Is], [As] and [Status] build mappers for your own sentinel and typed
+//     errors; [MapperFunc] adapts any function.
 //  4. Built-in mappers: for the sentinel errors the application returns,
 //     such as [ErrNotFound], then for malformed, truncated or oversized
 //     request bodies and for deadline errors (see [WithoutBuiltins]).

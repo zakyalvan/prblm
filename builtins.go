@@ -3,7 +3,6 @@ package prblm
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"io"
 	"net/http"
 )
@@ -48,7 +47,8 @@ type sentinel struct {
 }
 
 // sentinels lists the sentinel errors with their problems, by ascending
-// status, so the lowest status wins for a chain that matches several.
+// status. The order only breaks a tie within one error whose Is method
+// reports several sentinels: the lowest status wins.
 var sentinels = []sentinel{
 	{err: ErrInvalidInput, status: http.StatusBadRequest, detail: "The request is invalid."},
 	{err: ErrUnauthenticated, status: http.StatusUnauthorized, detail: "Authentication is required."},
@@ -62,14 +62,53 @@ var sentinels = []sentinel{
 	{err: ErrUpstreamTimeout, status: http.StatusGatewayTimeout, detail: "An upstream service did not respond in time."},
 }
 
-// mapSentinel maps the first sentinel that err matches, as errors.Is reports
-// it, to an about:blank problem with the sentinel's status and fixed detail,
-// or returns nil when err matches none. The detail never comes from the
-// error text.
+// mapSentinel maps the first sentinel found in err's chain to an about:blank
+// problem with the sentinel's status and fixed detail, or returns nil when the
+// chain holds none. The detail never comes from the error text.
 func mapSentinel(_ context.Context, err error) *Problem {
-	for _, s := range sentinels {
-		if errors.Is(err, s.err) {
-			return &Problem{Status: s.status, Detail: s.detail}
+	s := firstSentinel(err)
+	if s == nil {
+		return nil
+	}
+
+	return &Problem{Status: s.status, Detail: s.detail}
+}
+
+// firstSentinel walks err's chain in errors.Is order and returns the first
+// sentinel an error is or reports, or nil (see the sentinel docs for why the
+// outermost wins). errors.Is alone can't say where in the chain a match is.
+func firstSentinel(err error) *sentinel {
+	if err == nil {
+		return nil
+	}
+
+	if s := ownSentinel(err); s != nil {
+		return s
+	}
+
+	switch u := err.(type) { //nolint:errorlint // one link of the chain, as errors.Is unwraps it
+	case interface{ Unwrap() error }:
+		return firstSentinel(u.Unwrap())
+	case interface{ Unwrap() []error }:
+		for _, e := range u.Unwrap() {
+			if s := firstSentinel(e); s != nil {
+				return s
+			}
+		}
+	}
+
+	return nil
+}
+
+// ownSentinel returns the sentinel err itself is or reports through its Is
+// method, without looking at the errors it wraps, as errors.Is tests each
+// error. Comparing with == can't panic: every sentinel is a pointer.
+func ownSentinel(err error) *sentinel {
+	is, hasIs := err.(interface{ Is(target error) bool })
+
+	for i := range sentinels {
+		if err == sentinels[i].err || hasIs && is.Is(sentinels[i].err) { //nolint:errorlint // one link of the chain, as errors.Is tests it
+			return &sentinels[i]
 		}
 	}
 

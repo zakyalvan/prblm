@@ -100,8 +100,11 @@ error as returned.
 - Your own code comes first: a problem or describer in the chain, a scoped mapper or a consumer
   mapper such as `prblm.Is(prblm.ErrNotFound, ...)` replaces the default problem.
 - A sentinel beats a `WithStatus` hint: `prblm.WithStatus(prblm.ErrNotFound, 400)` is a 404.
-- When an error matches several sentinels, the lowest status wins; a sentinel wins over a standard
-  library error, such as `context.DeadlineExceeded`, in the same chain.
+- When an error matches several sentinels, the first one found wins, in the order `errors.Is`
+  walks the chain: the outermost error first, wrapped errors in the order given. So
+  `fmt.Errorf("%w: %w", prblm.ErrBadGateway, upstreamErr)` is a 502 even when `upstreamErr` wraps
+  `ErrNotFound`. A sentinel wins over a standard library error, such as
+  `context.DeadlineExceeded`, in the same chain.
 - `WithoutBuiltins()` turns the sentinels off with the other built-ins.
 - `ErrPermissionDenied` (403) confirms that the resource exists; when that is itself secret, return
   `ErrNotFound`.

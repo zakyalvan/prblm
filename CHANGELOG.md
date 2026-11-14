@@ -31,8 +31,8 @@ The first release, planned as v0.1.0.
   `ErrUnavailable` (503) and `ErrUpstreamTimeout` (504). Each maps, with no configuration, to an
   `about:blank` problem with a fixed detail; the wrap text never reaches the client. They are
   built-in mappers, so consumer code overrides them and `WithoutBuiltins` turns them off. A
-  sentinel beats a `WithStatus` hint and a standard library error in the same chain, and the
-  lowest status wins between two sentinels. No sentinel problem carries `Retry-After` or
+  sentinel beats a `WithStatus` hint and a standard library error in the same chain, and between
+  two sentinels the outermost one wins. No sentinel problem carries `Retry-After` or
   `WWW-Authenticate`; the godoc shows how to add them.
 - Enrichers (`WithEnrichers`) with a default instance from the request path, and an `OnError` hook
   for logging. Panics in mappers, enrichers and the hook are contained and reported. Notes about
